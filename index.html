@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Cyber Shapes VR</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      overflow: hidden;
+      background: #000;
+      font-family: 'Courier New', 'Lucida Console', monospace;
+      color: #fff;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #app {
+      width: 100%;
+      height: 100%;
+      position: absolute;
+      top: 0;
+      left: 0;
+    }
+
+    #app canvas {
+      display: block;
+    }
+
+    #overlay {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 10;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: flex-start;
+      padding-top: 40px;
+    }
+
+    #title {
+      font-size: 3rem;
+      font-weight: bold;
+      color: #0ff;
+      text-shadow:
+        0 0 10px #0ff,
+        0 0 20px #0ff,
+        0 0 40px #0ff,
+        0 0 80px #00aaff;
+      letter-spacing: 0.3em;
+      text-transform: uppercase;
+    }
+
+    #subtitle {
+      font-size: 1.1rem;
+      color: #ff00ff;
+      text-shadow:
+        0 0 8px #ff00ff,
+        0 0 16px #ff00ff;
+      letter-spacing: 0.5em;
+      margin-top: 8px;
+      opacity: 0.85;
+    }
+
+    #controls {
+      margin-top: 20px;
+      font-size: 0.75rem;
+      color: #0ff;
+      opacity: 0.6;
+      text-align: center;
+      line-height: 1.8;
+      animation: fadeControls 6s forwards;
+    }
+
+    @keyframes fadeControls {
+      0% { opacity: 0.6; }
+      70% { opacity: 0.6; }
+      100% { opacity: 0; }
+    }
+
+    /* VRButton styling override */
+    #overlay button,
+    body > button {
+      pointer-events: auto;
+    }
+  </style>
+</head>
+<body>
+  <div id="app"></div>
+  <div id="overlay">
+    <div id="title">CYBER SHAPES VR</div>
+    <div id="subtitle">SPATIAL PLAYGROUND</div>
+    <div id="controls">
+      Click to spawn shapes | Drag to rotate view | Scroll to zoom<br>
+      Enter VR for immersive mode
+    </div>
+  </div>
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
