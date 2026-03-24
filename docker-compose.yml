@@ -1,0 +1,6 @@
+services:
+  cyber-shapes-vr:
+    image: ghcr.io/atvriders/cyber-shapes-vr:latest
+    ports:
+      - "3020:3020"
+    restart: unless-stopped
