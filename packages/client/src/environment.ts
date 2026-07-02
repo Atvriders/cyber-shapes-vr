@@ -1,11 +1,22 @@
 import * as THREE from 'three';
 
-let stars;
-let dustParticles;
-let hudPanels = [];
-let dustVelocities;
+interface HudPanel {
+  mesh: THREE.Mesh;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  texture: THREE.CanvasTexture;
+}
 
-export function initEnvironment(scene) {
+let stars: THREE.Points | null = null;
+let dustParticles: THREE.Points | null = null;
+let hudPanels: HudPanel[] = [];
+let dustVelocities: Float32Array;
+
+export function initEnvironment(scene: THREE.Scene): {
+  stars: THREE.Points;
+  dustParticles: THREE.Points;
+  hudPanels: HudPanel[];
+} {
   // --- Grid floor ---
   const grid = new THREE.GridHelper(200, 200, 0x00ffff, 0x003333);
   grid.position.y = -1;
@@ -54,7 +65,7 @@ export function initEnvironment(scene) {
     transparent: true,
     opacity: 0.6,
     blending: THREE.AdditiveBlending,
-    depthWrite: false
+    depthWrite: false,
   });
   dustParticles = new THREE.Points(dustGeo, dustMat);
   scene.add(dustParticles);
@@ -78,11 +89,17 @@ export function initEnvironment(scene) {
   return { stars, dustParticles, hudPanels };
 }
 
-function createHudPanel(text, x, y, z, scene) {
+function createHudPanel(
+  text: string,
+  x: number,
+  y: number,
+  z: number,
+  scene: THREE.Scene
+): HudPanel {
   const canvas = document.createElement('canvas');
   canvas.width = 256;
   canvas.height = 128;
-  const ctx = canvas.getContext('2d');
+  const ctx = canvas.getContext('2d')!;
 
   drawHudText(ctx, text, canvas.width, canvas.height);
 
@@ -93,7 +110,7 @@ function createHudPanel(text, x, y, z, scene) {
     opacity: 0.7,
     blending: THREE.AdditiveBlending,
     side: THREE.DoubleSide,
-    depthWrite: false
+    depthWrite: false,
   });
   const geo = new THREE.PlaneGeometry(1.6, 0.8);
   const mesh = new THREE.Mesh(geo, mat);
@@ -103,7 +120,7 @@ function createHudPanel(text, x, y, z, scene) {
   return { mesh, canvas, ctx, texture };
 }
 
-function drawHudText(ctx, text, w, h) {
+function drawHudText(ctx: CanvasRenderingContext2D, text: string, w: number, h: number): void {
   ctx.clearRect(0, 0, w, h);
   // Background
   ctx.fillStyle = 'rgba(0, 20, 40, 0.4)';
@@ -123,14 +140,15 @@ function drawHudText(ctx, text, w, h) {
   ctx.shadowBlur = 0;
 }
 
-export function updateHudShapeCount(count) {
+/** Update the "SHAPES: N" HUD counter panel. Called externally (e.g. from ShapeStore events in A8). */
+export function updateHudShapeCount(count: number): void {
   if (hudPanels.length < 2) return;
   const panel = hudPanels[1];
   drawHudText(panel.ctx, `SHAPES: ${count}`, panel.canvas.width, panel.canvas.height);
   panel.texture.needsUpdate = true;
 }
 
-export function updateEnvironment(delta) {
+export function updateEnvironment(delta: number): void {
   // Rotate stars slowly
   if (stars) {
     stars.rotation.y += delta * 0.01;
@@ -138,7 +156,7 @@ export function updateEnvironment(delta) {
 
   // Float dust upward and wrap
   if (dustParticles) {
-    const positions = dustParticles.geometry.attributes.position.array;
+    const positions = dustParticles.geometry.attributes.position.array as Float32Array;
     const count = positions.length / 3;
     for (let i = 0; i < count; i++) {
       positions[i * 3 + 1] += dustVelocities[i] * delta;

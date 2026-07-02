@@ -1,0 +1,72 @@
+# syntax=docker/dockerfile:1
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 1: build shared + server via TypeScript project references
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Copy manifests for cache efficiency
+COPY package*.json ./
+COPY packages/shared/package*.json packages/shared/
+COPY packages/server/package*.json packages/server/
+COPY packages/client/package*.json packages/client/
+
+# Install all deps (needed so TypeScript project refs can resolve @cyber-shapes/shared)
+RUN npm ci
+
+# Copy source (tsconfigs + src trees)
+COPY tsconfig.json tsconfig.base.json ./
+COPY packages/shared/ packages/shared/
+COPY packages/server/ packages/server/
+
+# `tsc -b` follows the project reference chain:
+#   packages/server/tsconfig.json → references packages/shared
+# Outputs:
+#   packages/shared/dist/   (compiled shared lib)
+#   packages/server/dist/   (compiled server, imports shared via node_modules symlink)
+RUN npm run -w packages/server build
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Stage 2: production runtime (no devDeps, no TypeScript toolchain)
+# ─────────────────────────────────────────────────────────────────────────────
+FROM node:20-alpine AS runtime
+
+WORKDIR /app
+
+# Copy root manifests so npm ci --omit=dev can prune devDeps
+COPY package*.json ./
+COPY packages/shared/package*.json packages/shared/
+COPY packages/server/package*.json packages/server/
+# Client manifest is needed for workspace integrity check even though we don't run it
+COPY packages/client/package*.json packages/client/
+
+# Install production deps only (no devDeps; no TypeScript, no vite, etc.)
+RUN npm ci --omit=dev
+
+# Copy compiled outputs from builder.
+#
+# Runtime resolution of @cyber-shapes/shared:
+#   node_modules/@cyber-shapes/shared  →  (workspace symlink)  →  packages/shared
+#   packages/shared/package.json exports: { ".": { "import": "./dist/index.js" } }
+#
+# With the conditional-exports "import" condition, Node resolves to the compiled
+# JS in dist/ — no TypeScript source or toolchain needed at runtime.
+# We copy only dist/ for shared (not the src/ tree); package.json is already
+# present from the manifest-copy layer above (tsc never modifies it).
+COPY --from=builder /app/packages/shared/dist packages/shared/dist
+COPY --from=builder /app/packages/server/dist packages/server/dist
+
+# Persist room snapshots to a volume (DATA_DIR is set below)
+ENV PORT=3030
+ENV DATA_DIR=/data
+VOLUME /data
+
+EXPOSE 3030
+
+# Healthcheck: HTTP GET /healthz on the server's own port
+HEALTHCHECK --interval=15s --timeout=5s --start-period=10s --retries=3 \
+    CMD wget -qO- http://localhost:3030/healthz || exit 1
+
+# Entry point: run the compiled server index (ESM)
+CMD ["node", "packages/server/dist/index.js"]

@@ -1,3 +1,23 @@
 node_modules/
 dist/
 .DS_Store
+
+# SDD scratch
+.superpowers/
+
+# Build outputs
+packages/*/dist/
+
+# TypeScript build info
+*.tsbuildinfo
+
+# Coverage
+coverage/
+
+# Local env
+.env
+.env.local
+
+# server runtime persistence output
+data/
+packages/server/data/

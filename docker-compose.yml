@@ -1,6 +1,66 @@
+##############################################################################
+# docker-compose.yml — cyber-shapes-vr
+#
+# Two services:
+#   server  — Node WS + HTTP server (port 3030, internal only)
+#   web     — nginx serving the static client + WS reverse-proxy (port 3020)
+#
+# Usage (build from source):
+#   docker compose up --build
+#
+# Usage (pull prebuilt GHCR images — replace <sha> with a real image tag):
+#   IMAGE_WEB=ghcr.io/atvriders/cyber-shapes-vr:<sha>
+#   IMAGE_SERVER=ghcr.io/atvriders/cyber-shapes-vr-server:<sha>
+#   docker compose -f docker-compose.yml up
+#   (override image: lines below or set via env vars)
+##############################################################################
+
 services:
-  cyber-shapes-vr:
-    image: ghcr.io/atvriders/cyber-shapes-vr:latest
-    ports:
-      - "3020:3020"
+  # ── WebSocket + HTTP server ───────────────────────────────────────────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    # To pull a prebuilt image instead, comment out `build` above and set:
+    # image: ghcr.io/atvriders/cyber-shapes-vr-server:latest
+    environment:
+      PORT: '3030'
+      DATA_DIR: /data
+    volumes:
+      - cyber-shapes-data:/data
+    networks:
+      - internal
+    # Server port is intentionally NOT exposed to the host; nginx reaches it
+    # via the internal network using the service name "server".
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3030/healthz']
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
     restart: unless-stopped
+
+  # ── nginx (static client + WS reverse-proxy) ─────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # To pull a prebuilt image instead, comment out `build` above and set:
+    # image: ghcr.io/atvriders/cyber-shapes-vr:latest
+    ports:
+      - '3020:80'
+    networks:
+      - internal
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+# ── Named volume for room persistence ────────────────────────────────────────
+volumes:
+  cyber-shapes-data:
+
+# ── Internal bridge network (server not reachable from host) ─────────────────
+networks:
+  internal:
+    driver: bridge
