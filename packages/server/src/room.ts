@@ -10,8 +10,14 @@ import {
   type ServerMsg,
   type PlayerInfo,
   type NetShape,
+  type Vec3,
+  type PhysicsParams,
+  type PhysicsBody,
+  type ShapeType,
   MAX_PLAYERS,
   MAX_SHAPES,
+  applyRadialImpulse,
+  clampPulseMagnitude,
 } from '@cyber-shapes/shared';
 import { ServerWorld } from './serverWorld.js';
 import type { RoomPersistence } from './persistence.js';
@@ -19,13 +25,53 @@ import type { RoomPersistence } from './persistence.js';
 /** Small velocity threshold below which a shape is considered "at rest" for tick inclusion. */
 const VELOCITY_EPSILON = 0.01;
 
+/**
+ * Task C18 (F8 Resonora): one enriched floor impact — shape facts + impactSpeed +
+ * an attributed player key — the server Conductor scores into a MUSIC_NOTE. Shaped
+ * to the Conductor's `ImpactInput` (which is a superset with an optional p95).
+ */
+export interface ResonoraImpact {
+  shapeId: string;
+  playerId: string;
+  colorIndex: number;
+  type: ShapeType;
+  size: number;
+  impactSpeed: number;
+  posX: number;
+}
+
 export class Room {
   readonly roomId: string;
 
   private readonly _world: ServerWorld;
   private readonly _players: Map<string, PlayerInfo> = new Map();
   private _seq = 0;
+  /**
+   * Phase C accommodation #2 (spec §3, C0): a u32 PHYSICS-tick counter, bumped
+   * once per `tick()` (30 Hz) — distinct from `_seq` (bumped per `state`
+   * broadcast, ~15 Hz). Stamped into every `state` message as `serverTick`.
+   * Wraps at 2³² (roomEpoch re-issue handles process lifetime, spec Appendix B).
+   */
+  private _serverTick = 0;
   private readonly _persistence: RoomPersistence | null;
+  /**
+   * Phase C accommodation #4 (spec §3, C0): when true, a rejected grab is ALSO
+   * returned as a broadcastable `grab-rejected` event (alongside Phase B's
+   * existing "loser gets nothing" behavior — the successful-grab and no-op paths
+   * are untouched). Off by default so Phase B behavior is bit-identical until a
+   * later task (C9/C21) opts in. Never REPLACES existing behavior.
+   */
+  private _broadcastGrabRejections = false;
+
+  /**
+   * Task C18 (F8 Resonora): the enriched floor-impact list from the MOST RECENT
+   * `tick()`, exposed for the server Conductor to score into MUSIC_NOTE events.
+   * This is a pure read-only capture — it does NOT change the `ServerMsg[]` the
+   * tick returns (so the Phase B / C0 broadcast path is bit-identical). Empty on
+   * a tick with no floor impacts. The Conductor (a sibling host) reads it via
+   * {@link lastImpacts}; nothing here depends on the Conductor (cut-safe).
+   */
+  private _lastImpacts: ResonoraImpact[] = [];
 
   constructor(roomId: string, idFactory: () => string, persistence: RoomPersistence | null = null) {
     this.roomId = roomId;
@@ -42,10 +88,46 @@ export class Room {
   }
 
   /**
+   * Task C18 (F8 Resonora): the enriched floor impacts from the most recent
+   * `tick()` (empty if none). The server Conductor reads this each tick to score
+   * MUSIC_NOTE events. Read-only; a sibling host, never a dependency of the tick.
+   */
+  lastImpacts(): readonly ResonoraImpact[] {
+    return this._lastImpacts;
+  }
+
+  /**
+   * The authoritative ServerWorld this room wraps. Exposed so the C10
+   * RoomTimelineHost can build its RoomHandle over the SAME world the sim ticks
+   * (cue spawn/pin/remove must hit the live world, not a copy). The host only
+   * touches spawn/remove/pin/unpin/get + reads the shape list.
+   */
+  get world(): ServerWorld {
+    return this._world;
+  }
+
+  /**
    * Restore previously persisted shapes into the world (stable ids, no idFactory).
    */
   restore(shapes: NetShape[]): void {
     this._world.restore(shapes);
+  }
+
+  /**
+   * Current u32 physics-tick counter (accommodation #2). Exposed for tests and
+   * for later tasks (C21 replay) that key off serverTick.
+   */
+  get serverTick(): number {
+    return this._serverTick;
+  }
+
+  /**
+   * Phase C accommodation #4 (spec §3, C0): opt into broadcastable grab
+   * rejections. OFF by default — Phase B behavior is unchanged until a later
+   * task (C9/C21) enables it. This never replaces the existing grab paths.
+   */
+  setBroadcastGrabRejections(on: boolean): void {
+    this._broadcastGrabRejections = on;
   }
 
   // ---------------------------------------------------------------------------
@@ -132,7 +214,20 @@ export class Room {
 
       case 'grab': {
         const ok = this._world.grab(msg.id, playerId);
-        if (!ok) return [];
+        if (!ok) {
+          // Phase C accommodation #4 (spec §3, C0): ADDITIVELY expose a
+          // broadcastable rejection. Phase B behavior (return []) is preserved
+          // unless a later task opts in via setBroadcastGrabRejections(true).
+          // Never emitted when the grab merely no-ops on an absent/self-held
+          // shape — only when a DIFFERENT peer already holds it (a real duel).
+          if (this._broadcastGrabRejections) {
+            const shape = this._world.get(msg.id);
+            if (shape && shape.grabbedBy !== null && shape.grabbedBy !== playerId) {
+              return [{ t: 'grab-rejected', id: msg.id, peerId: playerId, by: shape.grabbedBy }];
+            }
+          }
+          return [];
+        }
         result = [{ t: 'grab', id: msg.id, peerId: playerId }];
         dirty = true;
         break;
@@ -141,7 +236,21 @@ export class Room {
       case 'release': {
         const ok = this._world.release(msg.id, playerId, msg.velocity, msg.position, msg.rotation);
         if (!ok) return [];
-        result = [{ t: 'grab', id: msg.id, peerId: null }];
+        // Phase C accommodation #5 (spec §3, C0): the release event carries the
+        // server-computed final {pos, vel} (needed by C30; harmless to Phase B
+        // clients, which ignore the extra fields). Read them back from the world
+        // so they are the authoritative post-release values, not the raw intent.
+        const released = this._world.get(msg.id);
+        const grabEvent: ServerMsg = released
+          ? {
+              t: 'grab',
+              id: msg.id,
+              peerId: null,
+              pos: { ...released.position },
+              vel: { ...released.velocity },
+            }
+          : { t: 'grab', id: msg.id, peerId: null };
+        result = [grabEvent];
         dirty = true;
         break;
       }
@@ -206,10 +315,41 @@ export class Room {
    * plus a `despawn` for each out-of-bounds removal.
    *
    * "Moving" = grabbed OR not grounded OR velocity magnitude > VELOCITY_EPSILON.
+   *
+   * `params` (C10 single-overlay host) is the effective PhysicsParams the sim
+   * steps under this tick — the timeline host's merged base+overlay. It DEFAULTS
+   * to DEFAULT_PARAMS (via ServerWorld.step's default), so every existing caller
+   * and Phase B parity are bit-identical.
    */
-  tick(dt: number): ServerMsg[] {
-    const { removed } = this._world.step(dt);
+  tick(dt: number, params?: PhysicsParams): ServerMsg[] {
+    const { impacts, removed } = params ? this._world.step(dt, params) : this._world.step(dt);
+    // Bump the physics-tick counter every tick (whether or not a `state` is
+    // emitted this tick) so serverTick reflects real sim time (accommodation #2).
+    this._serverTick = (this._serverTick + 1) >>> 0; // u32 wrap
     const broadcasts: ServerMsg[] = [];
+
+    // Phase C accommodation #3 (spec §3, C0): index this tick's floor impacts by
+    // shape id so the `state` message can carry the authoritative impactSpeed for
+    // any shape that struck the floor this tick (consumed by Resonora / Chrono Snap).
+    const impactSpeedById = new Map<string, number>();
+    for (const im of impacts) impactSpeedById.set(im.id, im.speed);
+
+    // Task C18 (F8 Resonora): capture the enriched impact list for the Conductor
+    // (shape facts → note pitch/timbre/octave; impactSpeed → velocity; grabber →
+    // per-player budget/noteId, falling back to the shape id when the thrower is
+    // no longer holding it). Read-only; does not alter the returned events.
+    this._lastImpacts = impacts.map((im) => {
+      const shape = this._world.get(im.id);
+      return {
+        shapeId: im.id,
+        playerId: shape?.grabbedBy ?? im.id,
+        colorIndex: shape?.colorIndex ?? 0,
+        type: (shape?.type ?? 'cube') as ShapeType,
+        size: shape?.scale ?? 1,
+        impactSpeed: im.speed,
+        posX: shape?.position.x ?? 0,
+      };
+    });
 
     // Build the moving-shapes snapshot
     const movingShapes = this._world.shapes.filter((s) => {
@@ -223,12 +363,18 @@ export class Room {
       broadcasts.push({
         t: 'state',
         seq: ++this._seq,
-        shapes: movingShapes.map((s) => ({
-          id: s.id,
-          p: { ...s.position },
-          r: { ...s.rotation },
-          v: { ...s.velocity },
-        })),
+        serverTick: this._serverTick,
+        shapes: movingShapes.map((s) => {
+          const entry: { id: string; p: Vec3; r: Vec3; v: Vec3; s?: number } = {
+            id: s.id,
+            p: { ...s.position },
+            r: { ...s.rotation },
+            v: { ...s.velocity },
+          };
+          const impactSpeed = impactSpeedById.get(s.id);
+          if (impactSpeed !== undefined) entry.s = impactSpeed;
+          return entry;
+        }),
       });
     }
 
@@ -251,14 +397,71 @@ export class Room {
 
   /**
    * Build the full welcome payload for a newly joining player.
+   *
+   * Task C22 (carry #1, laws-chip-on-join): `baseParams` is the room's
+   * STANDING law (the caller passes the RoomTimelineHost's `baseParams` — the
+   * elected law, or DEFAULT_PARAMS when none stands) as an ADDITIVE field.
+   * This is deliberately NOT the EFFECTIVE params (which also carry a transient
+   * cue overlay, sent separately via ENV_STATE right after welcome) — a joiner's
+   * laws chip must reflect the STANDING law immediately, not wait for the next
+   * VOTE_RESULT (spec §7.5 / §7.22).
    */
-  snapshotFor(playerId: string): ServerMsg {
+  snapshotFor(playerId: string, baseParams: PhysicsParams): ServerMsg {
     return {
       t: 'welcome',
       playerId,
       room: this.roomId,
       shapes: this._world.shapes,
       players: [...this._players.values()],
+      baseParams,
     };
   }
+}
+
+// ---------------------------------------------------------------------------
+// Task C14 (F4 Wisp Protocol) — server-validated WISP_PULSE application.
+//
+// A wisp fires a pulse claiming an epicenter + a magnitude. The server NEVER
+// trusts the client magnitude (anti-cheat, spec §7.4): it CLAMPS it via the
+// shared `clampPulseMagnitude` and applies the resulting radial impulse to the
+// live world through the shared, SEEDED `applyRadialImpulse` (deterministic —
+// no Math.random). Grabbed bodies are exempt (applyRadialImpulse skips them).
+//
+// The unclamped cosmetic feedback (wisp-colored tracer + 300 ms flash +
+// shockwave ring) is a CLIENT concern and is not applied here — it never touches
+// the authoritative world. The per-socket 2/s TOKEN BUCKET that gates whether a
+// pulse reaches this function lives in the connection layer (WispPulseBucket).
+// ---------------------------------------------------------------------------
+
+/**
+ * Apply a server-clamped WISP_PULSE radial impulse to a room's world.
+ *
+ * @param room            the target room.
+ * @param epicenter       the pulse origin (the wisp's aimed point).
+ * @param clientMagnitude the CLIENT-SENT magnitude — clamped, never trusted.
+ * @param seed            deterministic jitter seed (u32) for `applyRadialImpulse`.
+ * @returns the clamped magnitude actually applied (0 → no-op impulse).
+ */
+export function applyWispPulse(
+  room: Room,
+  epicenter: Vec3,
+  clientMagnitude: number,
+  seed: number
+): number {
+  const magnitude = clampPulseMagnitude(clientMagnitude);
+  if (magnitude <= 0) return 0; // negative/NaN/zero → the world feels nothing.
+
+  // Build PhysicsBody views over the live shapes (same object references for
+  // position/velocity, so applyRadialImpulse's velocity writes go straight
+  // through to the world — mirrors ServerWorld.step's body view).
+  const bodies: PhysicsBody[] = room.world.shapes.map((s) => ({
+    position: s.position,
+    velocity: s.velocity,
+    scale: s.scale,
+    type: s.type,
+    grabbedBy: s.grabbedBy,
+    grounded: s.grounded,
+  }));
+  applyRadialImpulse(bodies, epicenter, magnitude, seed >>> 0);
+  return magnitude;
 }

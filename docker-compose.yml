@@ -26,6 +26,19 @@ services:
     environment:
       PORT: '3030'
       DATA_DIR: /data
+      # C24 audit (MF2): the `web` nginx (below) strips any inbound CF-Connecting-IP
+      # and appends the real peer to X-Forwarded-For, because this origin's :3020 is
+      # ALSO reachable direct (published port), so a bypass caller could otherwise
+      # forge clientIpOf rung 1. The server therefore does NOT trust CF-Connecting-IP
+      # and keys on the nginx-appended XFF hop instead: nginx is ONE trusted hop in
+      # front of the Cloudflare-appended client entry → TRUSTED_PROXY_HOPS=1.
+      # NB: for a COMPLETE fix, restrict :3020 to Cloudflare at the network layer
+      # (firewall to CF IP ranges / Cloudflare Authenticated Origin Pulls) — header
+      # rewriting alone cannot authenticate origin-direct traffic. If :3020 is truly
+      # locked to the tunnel (sole ingress), you may instead leave CF-Connecting-IP
+      # trusted (TRUST_CF_CONNECTING_IP unset, TRUSTED_PROXY_HOPS=0) — see nginx.conf.
+      TRUST_CF_CONNECTING_IP: 'false'
+      TRUSTED_PROXY_HOPS: '1'
     volumes:
       - cyber-shapes-data:/data
     networks:
@@ -48,6 +61,10 @@ services:
     # To pull a prebuilt image instead, comment out `build` above and set:
     # image: ghcr.io/atvriders/cyber-shapes-vr:latest
     ports:
+      # Cloudflare Tunnel forwards to this port. C24 audit (MF2): it is reachable
+      # ORIGIN-DIRECT (bypassing Cloudflare) — restrict it to Cloudflare IP ranges
+      # (firewall) or enable Authenticated Origin Pulls so a forged X-Forwarded-For /
+      # CF-Connecting-IP cannot reach the server off-tunnel. See the server env above.
       - '3020:80'
     networks:
       - internal

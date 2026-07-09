@@ -72,6 +72,40 @@ interface AvatarEntry {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   nameplateTexture: THREE.CanvasTexture<any>;
   nameplatePlaneGeo: THREE.PlaneGeometry;
+  /** Task C17: the current remote rig scale (1 for a normal player). */
+  playerScale: number;
+  /**
+   * Task C28 (F17 Daemon Crew): true iff this remote peer is a synthetic DAEMON
+   * (`PlayerInfo.synthetic`, a `DMN-` callsign). The head renders with a brighter
+   * non-humanoid DRONE emissive and the nameplate carries a "DAEMON" badge — so a
+   * daemon never reads as a human player (protects the "every ghost is real" line).
+   */
+  synthetic: boolean;
+}
+
+/** The fixed drone hue for a synthetic (daemon) avatar — a cold cyan, never a player color. */
+const DAEMON_DRONE_HEX = 0x00e5ff;
+
+// ---------------------------------------------------------------------------
+// Task C17 (F7 Titan Protocol) — remote avatar scaling.
+//
+// A titanized remote player carries `playerScale` on their presence (spec §7.7);
+// the avatar head + hands + ring multiply by it so a giant reads as a giant on
+// every screen. The NAMEPLATE scale is CLAMPED (spec §7.7: "nameplate scale
+// clamped") — a 10× nameplate would blot out the screen and break the 5-m
+// legibility rule, so it grows only slightly and its OFFSET tracks the (scaled)
+// head so it still floats above the giant.
+// ---------------------------------------------------------------------------
+
+/** The remote nameplate never scales past this even for a 10× titan (legibility). */
+const NAMEPLATE_MAX_SCALE = 1.6;
+/** The base nameplate offset above the head (unscaled). */
+const NAMEPLATE_BASE_OFFSET = 0.28;
+
+/** The clamped nameplate scale for a given rig scale (a gentle sqrt growth). */
+function nameplateScaleFor(playerScale: number): number {
+  if (!Number.isFinite(playerScale) || playerScale <= 1) return 1;
+  return Math.min(NAMEPLATE_MAX_SCALE, Math.sqrt(playerScale));
 }
 
 // ---------------------------------------------------------------------------
@@ -110,7 +144,8 @@ function makeCanvasLike(): CanvasLike {
 
 function makeNameplateCanvas(
   name: string,
-  colorHex: number
+  colorHex: number,
+  synthetic = false
 ): {
   canvas: CanvasLike;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -118,7 +153,7 @@ function makeNameplateCanvas(
 } {
   const canvas = makeCanvasLike();
   const ctx = canvas.getContext('2d');
-  if (ctx) drawNameplateText(ctx, name, colorHex, NAMEPLATE_W, NAMEPLATE_H);
+  if (ctx) drawNameplateText(ctx, name, colorHex, NAMEPLATE_W, NAMEPLATE_H, synthetic);
   // THREE.CanvasTexture accepts HTMLCanvasElement | OffscreenCanvas; cast for compatibility
   const texture = new THREE.CanvasTexture(canvas as unknown as OffscreenCanvas);
   return { canvas, texture };
@@ -129,7 +164,8 @@ function drawNameplateText(
   name: string,
   colorHex: number,
   w: number,
-  h: number
+  h: number,
+  synthetic = false
 ): void {
   const css = `#${colorHex.toString(16).padStart(6, '0')}`;
   ctx.clearRect(0, 0, w, h);
@@ -144,7 +180,16 @@ function drawNameplateText(
   ctx.textBaseline = 'middle';
   ctx.shadowColor = css;
   ctx.shadowBlur = 8;
-  ctx.fillText(name, w / 2, h / 2);
+  // Task C28 (F17 Daemon Crew): a synthetic peer carries a "DAEMON" badge above its
+  // callsign so it is unmistakably NOT a human player (§7.17 narration guard).
+  if (synthetic) {
+    ctx.font = 'bold 12px Courier New, monospace';
+    ctx.fillText('◆ DAEMON', w / 2, h * 0.3);
+    ctx.font = 'bold 18px Courier New, monospace';
+    ctx.fillText(name, w / 2, h * 0.66);
+  } else {
+    ctx.fillText(name, w / 2, h / 2);
+  }
   ctx.shadowBlur = 0;
 }
 
@@ -160,28 +205,44 @@ export class Avatars {
   }
 
   /**
+   * Task C33 (F22 Desktop Command): the live remote peer ids, for the desktop
+   * FOLLOW camera's target cycle (§7.22 — Tab cycles residents). Render-only.
+   */
+  ids(): string[] {
+    return [...this.avatars.keys()];
+  }
+
+  /**
    * Create (or update name/color of) the avatar for `player`.
    * Idempotent: calling again for the same id does NOT add duplicates.
    */
   upsert(player: PlayerInfo): void {
+    const synthetic = player.synthetic === true;
     const existing = this.avatars.get(player.id);
     if (existing) {
-      // Update color + nameplate if they changed.
+      // Update color + nameplate if they changed (a synthetic peer keeps its drone hue).
       this._applyColor(existing, player.color);
       this._refreshNameplate(existing, player.name, player.color);
+      // Task C17: a re-upsert may carry an updated playerScale (presence refresh).
+      if (player.playerScale !== undefined) this.setPlayerScale(player.id, player.playerScale);
       return;
     }
 
     const { headGeo, handGeo, ringGeo } = getSharedGeos();
-    const colorHex = CYBER_COLORS[player.color % CYBER_COLORS.length] ?? CYBER_COLORS[0];
+    // Task C28 (F17 Daemon Crew): a synthetic peer renders as a cold-cyan DRONE, not a
+    // player-colored humanoid — a distinct non-humanoid read (§7.17 styling).
+    const colorHex = synthetic
+      ? DAEMON_DRONE_HEX
+      : CYBER_COLORS[player.color % CYBER_COLORS.length] ?? CYBER_COLORS[0];
 
     // Head
     const headMat = new THREE.MeshStandardMaterial({
       color: colorHex,
       emissive: colorHex,
-      emissiveIntensity: 0.6,
-      metalness: 0.3,
-      roughness: 0.4,
+      emissiveIntensity: synthetic ? 1.0 : 0.6, // a brighter drone core
+      metalness: synthetic ? 0.8 : 0.3,
+      roughness: synthetic ? 0.2 : 0.4,
+      wireframe: synthetic, // a non-humanoid wireframe drone shell
     });
     const head = new THREE.Mesh(headGeo, headMat);
     head.name = `avatar-head-${player.id}`;
@@ -217,10 +278,11 @@ export class Avatars {
     ring.visible = false;
     this.scene.add(ring);
 
-    // Nameplate (canvas sprite plane above head)
+    // Nameplate (canvas sprite plane above head) — DAEMON badge for a synthetic peer.
     const { canvas: nameplateCanvas, texture: nameplateTexture } = makeNameplateCanvas(
       player.name,
-      colorHex
+      colorHex,
+      synthetic
     );
     const nameplatePlaneGeo = new THREE.PlaneGeometry(0.6, 0.15);
     const nameplateMat = new THREE.MeshBasicMaterial({
@@ -250,9 +312,46 @@ export class Avatars {
       nameplateCanvas,
       nameplateTexture,
       nameplatePlaneGeo,
+      playerScale: 1,
+      synthetic,
     };
 
     this.avatars.set(player.id, entry);
+
+    // Task C17: apply an initial playerScale from presence (a late joiner may land
+    // mid-titan). Default 1 leaves the avatar byte-identical to a non-titan avatar.
+    if (player.playerScale !== undefined && player.playerScale !== 1) {
+      this.setPlayerScale(player.id, player.playerScale);
+    }
+  }
+
+  /**
+   * Task C17 (F7 Titan Protocol): scale a remote player's avatar by `playerScale`
+   * (spec §7.7 — remote clients multiply avatar scale by presence playerScale). The
+   * head + hands + ring scale directly; the NAMEPLATE scale is CLAMPED (legibility)
+   * and its offset tracks the scaled head. A no-op if the player has no avatar.
+   */
+  setPlayerScale(playerId: string, playerScale: number): void {
+    const entry = this.avatars.get(playerId);
+    if (!entry) return;
+    const s = Number.isFinite(playerScale) && playerScale > 0 ? playerScale : 1;
+    entry.playerScale = s;
+    entry.head.scale.setScalar(s);
+    entry.hands[0].scale.setScalar(s);
+    entry.hands[1].scale.setScalar(s);
+    entry.ring.scale.setScalar(s);
+    // Nameplate: clamped scale + offset tracks the scaled head so it still floats
+    // above the giant without blotting out the screen.
+    const npScale = nameplateScaleFor(s);
+    entry.nameplate.scale.setScalar(npScale);
+    entry.nameplate.position.y = this._nameplateOffset(entry);
+  }
+
+  /** The nameplate Y-offset above the (scaled) head. */
+  private _nameplateOffset(entry: AvatarEntry): number {
+    // The head half-height (0.125) grows with the rig scale; keep the nameplate a
+    // little above the giant's crown.
+    return NAMEPLATE_BASE_OFFSET * entry.playerScale;
   }
 
   /**
@@ -270,8 +369,8 @@ export class Avatars {
       entry.head.position.set(hp.x, hp.y, hp.z);
       entry.head.quaternion.set(hq.x, hq.y, hq.z, hq.w);
 
-      // Nameplate follows head (offset up)
-      entry.nameplate.position.set(hp.x, hp.y + 0.28, hp.z);
+      // Nameplate follows head (offset up — scaled for a titan, spec §7.7).
+      entry.nameplate.position.set(hp.x, hp.y + this._nameplateOffset(entry), hp.z);
       entry.nameplate.quaternion.set(hq.x, hq.y, hq.z, hq.w);
 
       // Ring follows head too
@@ -369,7 +468,10 @@ export class Avatars {
   // -------------------------------------------------------------------------
 
   private _applyColor(entry: AvatarEntry, colorIndex: number): void {
-    const colorHex = CYBER_COLORS[colorIndex % CYBER_COLORS.length] ?? CYBER_COLORS[0];
+    // A synthetic (daemon) avatar keeps its fixed drone hue — never a player color.
+    const colorHex = entry.synthetic
+      ? DAEMON_DRONE_HEX
+      : CYBER_COLORS[colorIndex % CYBER_COLORS.length] ?? CYBER_COLORS[0];
     const c = new THREE.Color(colorHex);
     entry.headMat.color.set(c);
     entry.headMat.emissive.set(c);
@@ -380,10 +482,12 @@ export class Avatars {
   }
 
   private _refreshNameplate(entry: AvatarEntry, name: string, colorIndex: number): void {
-    const colorHex = CYBER_COLORS[colorIndex % CYBER_COLORS.length] ?? CYBER_COLORS[0];
+    const colorHex = entry.synthetic
+      ? DAEMON_DRONE_HEX
+      : CYBER_COLORS[colorIndex % CYBER_COLORS.length] ?? CYBER_COLORS[0];
     const ctx = entry.nameplateCanvas.getContext('2d');
     if (ctx) {
-      drawNameplateText(ctx, name, colorHex, NAMEPLATE_W, NAMEPLATE_H);
+      drawNameplateText(ctx, name, colorHex, NAMEPLATE_W, NAMEPLATE_H, entry.synthetic);
       entry.nameplateTexture.needsUpdate = true;
     }
   }

@@ -74,6 +74,26 @@ export function roomUrl(origin: string, id: string): string {
   return `${origin}/r/${id}`;
 }
 
+/**
+ * Extract the optional `?k=<secret>` join secret from a room URL.
+ * Returns null if the param is absent, empty, or the URL is malformed.
+ *
+ * The `k` param is appended to staff-distributed booth links:
+ *   `https://example.com/r/<roomId>?k=<hmac-join-secret>`
+ * The resident VR client forwards this so the server can authorize the
+ * privileged tier without requiring a separate login UI.
+ */
+export function parseJoinSecret(url: string): string | null {
+  if (!url) return null;
+  try {
+    const parsed = new URL(url);
+    const k = parsed.searchParams.get('k');
+    return typeof k === 'string' && k.length > 0 ? k : null;
+  } catch {
+    return null;
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FNV-1a 32-bit hash (public domain)
 // https://en.wikipedia.org/wiki/Fowler%E2%80%93Noll%E2%80%93Vo_hash_function

@@ -9,10 +9,13 @@
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:soak": "SOAK=1 vitest run soak.test.ts",
     "lint": "eslint .",
     "format": "prettier -w .",
     "typecheck": "tsc -b",
-    "build": "npm run build --workspaces --if-present"
+    "build": "npm run build --workspaces --if-present",
+    "size": "node tools/check-bundle-size.mjs",
+    "preflight": "node tools/preflight/cli.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.185.0",

@@ -97,17 +97,49 @@ function openSocket(url: string): Promise<WebSocket> {
   });
 }
 
-/** Send a join message and wait for the welcome. */
-async function joinRoom(
+/**
+ * Send a join message and wait for the welcome.
+ *
+ * Phase C (Task C2) amendment: the tiered join handshake now replies with a
+ * `hello` ({peerId, callsign, tier, roomEpoch}) BEFORE the `welcome` snapshot.
+ * An unadorned Phase B `{t:'join'}` (no tier field) still joins as a `resident`
+ * — so we skip the leading `hello` and return the `welcome` exactly as before.
+ */
+function joinRoom(
   ws: WebSocket,
   room: string,
   name: string,
   color = 0xff0000
 ): Promise<ServerMsg & { t: 'welcome' }> {
-  ws.send(encodeText({ t: 'join', room, name, color, protocol: 1 }));
-  const msg = await nextMsg(ws);
-  if (msg.t !== 'welcome') throw new Error(`Expected welcome, got ${msg.t}`);
-  return msg as ServerMsg & { t: 'welcome' };
+  // A SINGLE persistent listener collects until `welcome` — the C2 handshake
+  // now emits `hello` then `welcome` back-to-back, so a one-shot listener could
+  // race and drop the `welcome` between two reads (ws events are not buffered).
+  return new Promise<ServerMsg & { t: 'welcome' }>((resolve, reject) => {
+    const timer = setTimeout(() => {
+      ws.off('message', onMsg);
+      ws.off('error', onErr);
+      reject(new Error('joinRoom: timed out waiting for welcome'));
+    }, 3000);
+    const onMsg = (data: WebSocket.RawData, isBinary: boolean) => {
+      if (isBinary) return;
+      const msg = decodeText(data.toString()) as ServerMsg;
+      // Skip the leading `hello` (and any interleaved state) until `welcome`.
+      if (msg.t !== 'welcome') return;
+      clearTimeout(timer);
+      ws.off('message', onMsg);
+      ws.off('error', onErr);
+      resolve(msg as ServerMsg & { t: 'welcome' });
+    };
+    const onErr = (e: Error) => {
+      clearTimeout(timer);
+      ws.off('message', onMsg);
+      ws.off('error', onErr);
+      reject(e);
+    };
+    ws.on('message', onMsg);
+    ws.on('error', onErr);
+    ws.send(encodeText({ t: 'join', room, name, color, protocol: 1 }));
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +308,50 @@ describe('wsServer integration', () => {
     }
   });
 
+  it('Phase C accommodation #1: a NON-voice binary frame is dropped, not relayed as voice; real voice still works after', async () => {
+    const wsA = await openSocket(serverUrl);
+    const wsB = await openSocket(serverUrl);
+
+    try {
+      const wA = await joinRoom(wsA, 'roomC0binary', 'Alice');
+      const joinNotify = nextMsg(wsA);
+      await joinRoom(wsB, 'roomC0binary', 'Bob');
+      await joinNotify;
+
+      wsA.send(encodeText({ t: 'voice-join' }));
+      wsB.send(encodeText({ t: 'voice-join' }));
+      await new Promise<void>((r) => setTimeout(r, 50));
+
+      // A sends a binary frame whose FIRST BYTE is a Phase C opcode (0x2D
+      // GRAB_REJECTED), not a voice opcode. The server must DROP it (first-byte
+      // demux), so B receives no binary from it.
+      const foreign = new Uint8Array([0x2d, 0x00, 0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff]);
+      const bGotForeign = Promise.race([
+        nextBinary(wsB, 2000)
+          .then(() => 'got' as const)
+          .catch(() => 'none' as const),
+        new Promise<'none'>((r) => setTimeout(() => r('none'), 300)),
+      ]);
+      wsA.send(Buffer.from(foreign.buffer));
+      expect(await bGotForeign).toBe('none');
+
+      // A REAL voice frame still fans out normally (server unaffected).
+      const numericIdA = parseInt(wA.playerId.slice(1), 10);
+      const opus = new Uint8Array([0xde, 0xad, 0xbe, 0xef]);
+      const bReceived = nextBinary(wsB, 2000);
+      wsA.send(Buffer.from(packVoice(VOICE_OPUS, 0, Date.now(), 0, opus)));
+      const bBuf = await bReceived;
+      const unpacked = unpackVoice(
+        bBuf.buffer.slice(bBuf.byteOffset, bBuf.byteOffset + bBuf.byteLength)
+      );
+      expect(unpacked.opcode).toBe(VOICE_OPUS);
+      expect(unpacked.senderId).toBe(numericIdA);
+    } finally {
+      wsA.close();
+      wsB.close();
+    }
+  });
+
   it('9th client joining a full room receives error and connection closes', async () => {
     const sockets: WebSocket[] = [];
 
@@ -284,10 +360,9 @@ describe('wsServer integration', () => {
       for (let i = 0; i < 8; i++) {
         const ws = await openSocket(serverUrl);
         sockets.push(ws);
-        // Each join triggers player-join notifications to earlier sockets — ignore them here
-        ws.send(encodeText({ t: 'join', room: 'room4', name: `p${i}`, color: 0, protocol: 1 }));
-        // Wait for welcome (consuming it drains the socket)
-        await nextMsg(ws);
+        // Each join triggers player-join notifications to earlier sockets — ignore
+        // them here. joinRoom collects past the C2 `hello` to the `welcome`.
+        await joinRoom(ws, 'room4', `p${i}`, 0);
       }
 
       // 9th client
@@ -670,9 +745,9 @@ describe('join-path races (finding 6)', () => {
       for (let i = 0; i < 8; i++) {
         const ws = await openSocket(url);
         live.push(ws);
-        ws.send(encodeText({ t: 'join', room, name: `real${i}`, color: 0, protocol: 1 }));
-        const msg = await nextMsg(ws);
-        expect(msg.t).toBe('welcome'); // no ghost stole this slot
+        // C2: joinRoom collects past the leading `hello` to the `welcome`.
+        const welcome = await joinRoom(ws, room, `real${i}`, 0);
+        expect(welcome.t).toBe('welcome'); // no ghost stole this slot
       }
     } finally {
       for (const ws of live) ws.close();

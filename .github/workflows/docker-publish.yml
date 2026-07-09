@@ -34,6 +34,9 @@ jobs:
       - name: Test
         run: npm test
 
+      - name: Bundle size gate
+        run: npm run size
+
   # ── Build + push: client (nginx) image ────────────────────────────────────
   build-web:
     needs: test

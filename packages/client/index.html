@@ -123,6 +123,159 @@
         color: #fff;
         box-shadow: 0 0 20px rgba(255, 0, 255, 0.9);
       }
+
+      /* ---------------------------------------------------------------------
+         C33 (F22 Desktop Command, spec §7.22) — the DOM HUD overlay. The HUD is
+         pointer-interactive (ballot buttons, help), so it sets its own
+         pointer-events; the ambient #overlay stays pointer-events:none. Hidden
+         entirely in VR (the [hidden] attribute the rig's XR guard toggles).
+         --------------------------------------------------------------------- */
+      .desktop-hud {
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        z-index: 20;
+        font-size: 0.72rem;
+        color: #0ff;
+      }
+      .desktop-hud[hidden] {
+        display: none;
+      }
+      .desktop-hud-topbar {
+        position: absolute;
+        top: 8px;
+        left: 8px;
+        display: flex;
+        gap: 14px;
+        align-items: center;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 6px 12px;
+        border: 1px solid rgba(0, 255, 255, 0.4);
+        border-radius: 4px;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+      }
+      .desktop-hud-phase {
+        color: #ff00ff;
+        text-shadow: 0 0 8px #ff00ff;
+      }
+      .desktop-hud-laws {
+        color: #0ff;
+      }
+      .desktop-hud-cue {
+        position: absolute;
+        top: 44px;
+        left: 8px;
+        color: #ffea00;
+        text-shadow: 0 0 8px rgba(255, 234, 0, 0.6);
+        letter-spacing: 0.15em;
+      }
+      .desktop-hud-roster {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        background: rgba(0, 0, 0, 0.55);
+        padding: 6px 10px;
+        border: 1px solid rgba(0, 255, 255, 0.3);
+        border-radius: 4px;
+        min-width: 150px;
+        max-height: 40vh;
+        overflow: auto;
+      }
+      .desktop-hud-roster-heading {
+        color: #ff00ff;
+        letter-spacing: 0.2em;
+        margin-bottom: 4px;
+      }
+      .desktop-hud-roster-row {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+        padding: 1px 0;
+      }
+      .desktop-hud-roster-tier {
+        opacity: 0.6;
+      }
+      .desktop-hud-vote {
+        position: absolute;
+        bottom: 16px;
+        left: 8px;
+        background: rgba(0, 0, 0, 0.7);
+        padding: 10px 12px;
+        border: 1px solid #ff00ff;
+        border-radius: 4px;
+        pointer-events: auto;
+      }
+      .desktop-hud-vote[hidden] {
+        display: none;
+      }
+      .desktop-hud-vote-heading {
+        color: #ff00ff;
+        letter-spacing: 0.15em;
+        margin-bottom: 6px;
+      }
+      .desktop-hud-vote-options {
+        display: flex;
+        flex-direction: column;
+        gap: 4px;
+      }
+      .desktop-hud-vote-option {
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #0ff;
+        color: #0ff;
+        font-family: inherit;
+        font-size: inherit;
+        letter-spacing: 0.1em;
+        padding: 5px 10px;
+        cursor: pointer;
+        text-transform: uppercase;
+      }
+      .desktop-hud-vote-option[data-mine='true'] {
+        background: rgba(255, 0, 255, 0.25);
+        border-color: #ff00ff;
+        color: #fff;
+      }
+      .desktop-hud-help {
+        position: absolute;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        background: rgba(0, 0, 0, 0.9);
+        border: 1px solid #0ff;
+        border-radius: 6px;
+        padding: 20px 26px;
+        pointer-events: auto;
+        box-shadow: 0 0 24px rgba(0, 255, 255, 0.4);
+        max-height: 80vh;
+        overflow: auto;
+      }
+      .desktop-hud-help[hidden] {
+        display: none;
+      }
+      .desktop-help-title {
+        color: #ff00ff;
+        letter-spacing: 0.25em;
+        text-transform: uppercase;
+        margin-bottom: 12px;
+        text-align: center;
+      }
+      .desktop-help-row {
+        display: flex;
+        gap: 16px;
+        padding: 2px 0;
+      }
+      .desktop-help-key {
+        color: #ffea00;
+        min-width: 96px;
+        font-weight: bold;
+      }
+      .desktop-help-label {
+        color: #0ff;
+        opacity: 0.85;
+      }
     </style>
   </head>
   <body>
@@ -132,6 +285,7 @@
       <div id="subtitle">SPATIAL PLAYGROUND</div>
       <div id="controls">
         Click to spawn shapes | Drag to rotate view | Scroll to zoom<br />
+        T spawn | C recolor | V render mode | 1-4 cameras | Tab follow | ? help<br />
         Enter VR for immersive mode
       </div>
       <button id="shareBtn" type="button">Share / Play together</button>

@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+    <title>Cyber Shapes — Showrunner</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100%;
+        min-height: 100vh;
+        background: #05010a;
+        font-family: 'Courier New', 'Lucida Console', monospace;
+        color: #fff;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #director-root {
+        padding: 4vw;
+      }
+      .dc-phase {
+        font-size: 7vw;
+        font-weight: bold;
+        letter-spacing: 0.08em;
+        color: #0ff;
+        text-shadow: 0 0 12px #0ff;
+        text-align: center;
+        margin-bottom: 2vw;
+      }
+      .dc-phase[data-phase='FINALE'],
+      .dc-phase[data-phase='OVERLOAD'] {
+        color: #ff00aa;
+        text-shadow: 0 0 12px #ff00aa;
+      }
+      .dc-status {
+        text-align: center;
+        color: #8af;
+        min-height: 1.4em;
+        margin-bottom: 2vw;
+      }
+      .dc-tabbar {
+        display: flex;
+        gap: 2vw;
+        margin-bottom: 3vw;
+      }
+      .dc-tab-btn {
+        flex: 1;
+        padding: 3vw;
+        font-size: 4vw;
+        font-family: inherit;
+        font-weight: bold;
+        letter-spacing: 0.1em;
+        background: #12082a;
+        color: #6cf;
+        border: 2px solid #244;
+        border-radius: 8px;
+      }
+      .dc-tab-btn[data-active='true'] {
+        background: #0ff;
+        color: #001;
+        box-shadow: 0 0 18px #0ff;
+      }
+      .dc-show-controls {
+        display: flex;
+        flex-direction: column;
+        gap: 2.5vw;
+        margin-bottom: 3vw;
+      }
+      .dc-giant-btn {
+        padding: 6vw;
+        font-size: 6vw;
+        font-family: inherit;
+        font-weight: bold;
+        letter-spacing: 0.06em;
+        background: #1a0836;
+        color: #0ff;
+        border: 3px solid #0ff;
+        border-radius: 12px;
+        box-shadow: 0 0 20px rgba(0, 255, 255, 0.4);
+      }
+      .dc-giant-btn[data-confirm='true'] {
+        color: #ff0;
+        border-color: #ff0;
+        box-shadow: 0 0 20px rgba(255, 255, 0, 0.4);
+      }
+      .dc-cue-btn {
+        display: block;
+        width: 100%;
+        padding: 4vw;
+        margin-bottom: 2vw;
+        font-size: 4.5vw;
+        font-family: inherit;
+        font-weight: bold;
+        letter-spacing: 0.05em;
+        background: #12082a;
+        color: #6cf;
+        border: 2px solid #35507a;
+        border-radius: 10px;
+      }
+      .dc-cue-btn[data-destructive='true'] {
+        color: #f55;
+        border-color: #f55;
+      }
+      .dc-cue-btn[disabled] {
+        opacity: 0.4;
+        color: #667;
+        border-color: #223;
+      }
+      .dc-stats {
+        margin-top: 4vw;
+        padding: 3vw;
+        border: 2px solid #0af;
+        border-radius: 10px;
+        background: rgba(0, 40, 80, 0.3);
+      }
+      .dc-stat-line {
+        font-size: 3.6vw;
+        color: #9df;
+        padding: 0.6vw 0;
+      }
+      .dc-roster {
+        margin-top: 4vw;
+        border-top: 2px solid #244;
+        padding-top: 3vw;
+      }
+      .dc-roster-row {
+        display: flex;
+        align-items: center;
+        gap: 2vw;
+        padding: 2vw 0;
+        border-bottom: 1px solid #1a2540;
+      }
+      .dc-roster-label {
+        flex: 1;
+        font-size: 3.5vw;
+        color: #ace;
+      }
+      .dc-roster-mute,
+      .dc-roster-kick {
+        padding: 2vw 3vw;
+        font-family: inherit;
+        font-size: 3.2vw;
+        background: #12082a;
+        color: #6cf;
+        border: 2px solid #35507a;
+        border-radius: 8px;
+      }
+      .dc-roster-kick {
+        color: #f77;
+        border-color: #a44;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      @media (min-width: 700px) {
+        .dc-phase {
+          font-size: 3vw;
+        }
+        .dc-tab-btn,
+        .dc-giant-btn,
+        .dc-cue-btn {
+          font-size: 1.6vw;
+          padding: 1.4vw;
+        }
+        .dc-roster-label {
+          font-size: 1.2vw;
+        }
+        .dc-roster-mute,
+        .dc-roster-kick {
+          font-size: 1.1vw;
+          padding: 0.8vw 1.4vw;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="director-root"></div>
+    <script type="module" src="./console.ts"></script>
+  </body>
+</html>

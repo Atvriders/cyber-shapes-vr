@@ -8,7 +8,7 @@
  * persisted shapes on first create with stable ids.
  */
 
-import type { ServerMsg, NetShape } from '@cyber-shapes/shared';
+import type { ServerMsg, NetShape, Tier } from '@cyber-shapes/shared';
 import { Room } from './room.js';
 import type { RoomPersistence } from './persistence.js';
 
@@ -125,9 +125,30 @@ export class RoomManager {
   /**
    * Join a room: assign a per-room player id (p0, p1, ...) and register with the room.
    * Returns `{error:'room-full'}` if the room is at capacity.
+   *
+   * Phase B compatibility shim: a plain `join` is a `resident` join (the Phase B
+   * invariant — MAX_PLAYERS residents). Task C2's tiered path calls `joinTier`.
    */
   async join(
     roomId: string,
+    name: string,
+    color: number
+  ): Promise<{ room: Room; playerId: string } | { error: string }> {
+    return this.joinTier(roomId, 'resident', name, color);
+  }
+
+  /**
+   * Task C2: tier-aware join. Assigns a per-room peerId (`p0, p1, …`) from ONE
+   * monotonic counter shared across all tiers (so callsign attribution + voice
+   * senderId stay globally unique in the room). Only `resident` connections
+   * register as world `PlayerInfo` (the Phase B avatar players, cap MAX_PLAYERS);
+   * a resident over that cap is the Phase B `room-full` hard rejection. Every
+   * other tier gets a peerId + the room handle but does NOT consume a resident
+   * slot (its per-tier cap is enforced at the connection layer via TIER_CAPS).
+   */
+  async joinTier(
+    roomId: string,
+    tier: Tier,
     name: string,
     color: number
   ): Promise<{ room: Room; playerId: string } | { error: string }> {
@@ -138,33 +159,73 @@ export class RoomManager {
     }
     const room = await this.getOrCreate(roomId);
 
-    // Assign next player id for this room
+    // Assign next peer id for this room (shared counter across all tiers).
     const counter = this._playerCounters.get(roomId) ?? 0;
     const playerId = `p${counter}`;
-    this._playerCounters.set(roomId, counter + 1);
 
-    const ok = room.addPlayer({ id: playerId, name, color });
-    if (!ok) {
-      return { error: 'room-full' };
+    if (tier === 'resident') {
+      // Residents are world avatar players — cap-enforced by Room.addPlayer.
+      const ok = room.addPlayer({ id: playerId, name, color });
+      if (!ok) {
+        // Do NOT consume the counter for a rejected resident.
+        return { error: 'room-full' };
+      }
     }
 
+    this._playerCounters.set(roomId, counter + 1);
     return { room, playerId };
   }
 
   /**
-   * Remove a player from a room, drop the room if it becomes empty.
-   * Returns the ServerMsg[] produced by room.removePlayer.
+   * Task C28 (F17 Daemon Crew): SYNCHRONOUS resident join for a room that ALREADY
+   * exists (daemons are only summoned INTO a live room, so no create/restore await
+   * is needed). Mirrors {@link joinTier}'s resident branch EXACTLY — the SAME
+   * per-room peer counter and the SAME cap-enforced {@link Room.addPlayer} — so a
+   * daemon has NO god-mode: over MAX_PLAYERS it is refused precisely like a human.
+   * Returns the assigned peerId, or null (room-full, or no such live room). The
+   * connection layer routes daemon summons through here; a real human always uses
+   * the async {@link joinTier}.
    */
-  leave(roomId: string, playerId: string): ServerMsg[] {
+  joinResidentSync(roomId: string, name: string, color: number): string | null {
+    const room = this._rooms.get(roomId);
+    if (!room) return null;
+    const counter = this._playerCounters.get(roomId) ?? 0;
+    const playerId = `p${counter}`;
+    // Cap-enforced by Room.addPlayer (MAX_PLAYERS) — a daemon at cap is refused.
+    if (!room.addPlayer({ id: playerId, name, color })) return null;
+    this._playerCounters.set(roomId, counter + 1);
+    return playerId;
+  }
+
+  /**
+   * Remove a player from a room, dropping the room if it becomes empty.
+   * Returns the ServerMsg[] produced by room.removePlayer.
+   *
+   * `keepAlive` (Task C2): when the caller knows the room still has live
+   * connections that are NOT world players (wisps/crowd/spectators watching a
+   * resident-less room), it passes `keepAlive: true` so the room object (and its
+   * world shapes) survives past the last resident. The connection layer, which
+   * owns the authoritative per-room socket set, sets this. Default `false`
+   * preserves Phase B behavior (resident-only rooms drop with their last player).
+   */
+  leave(roomId: string, playerId: string, keepAlive = false): ServerMsg[] {
     const room = this._rooms.get(roomId);
     if (!room) return [];
     const events = room.removePlayer(playerId);
-    if (room.isEmpty) {
-      this._rooms.delete(roomId);
-      this._creating.delete(roomId);
-      this._playerCounters.delete(roomId);
+    if (room.isEmpty && !keepAlive) {
+      this.dropRoom(roomId);
     }
     return events;
+  }
+
+  /**
+   * Task C2: explicitly drop a room (called by the connection layer when the
+   * last SOCKET — of any tier — leaves, so a wisp-only room is reclaimed too).
+   */
+  dropRoom(roomId: string): void {
+    this._rooms.delete(roomId);
+    this._creating.delete(roomId);
+    this._playerCounters.delete(roomId);
   }
 
   get(roomId: string): Room | undefined {

@@ -20,6 +20,13 @@ export type AudioApi = {
   playGrab(): void;
   playRelease(): void;
   playImpact(v?: number): void;
+  /**
+   * Task C10: the in-headset COUNTDOWN klaxon (spec §7.2). A two-tone alarm
+   * blast — the audible half of the red-pulse+klaxon countdown (the numeric
+   * countdown is stage-only, never in the headset). Headset-LOCAL SFX; it never
+   * routes through the stage priority mixer (§6.2 headset-local audio is separate).
+   */
+  playKlaxon(): void;
 };
 
 /**
@@ -37,6 +44,7 @@ function noopAudio(): AudioApi {
     playImpact: (_v?: number) => {
       void _v;
     },
+    playKlaxon: () => {},
   };
 }
 
@@ -154,5 +162,35 @@ export function initAudio(): AudioApi {
     source.stop(now + 0.08);
   }
 
-  return { ctx, resume, playSpawn, playGrab, playRelease, playImpact };
+  // Task C10 — the countdown KLAXON: a two-tone alarm (a square-wave alternating
+  // between two pitches, ~0.5 s). Distinct from every play* SFX so a headset
+  // wearer instantly reads "phase transition imminent". Headset-local; never the
+  // stage mixer. Safe no-op before the first gesture (ctx not running).
+  function playKlaxon(): void {
+    if (ctx.state !== 'running') return;
+
+    const now = ctx.currentTime;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+
+    osc.type = 'square';
+    // Alarm two-tone: low → high → low → high across ~0.5 s.
+    osc.frequency.setValueAtTime(440, now);
+    osc.frequency.setValueAtTime(620, now + 0.12);
+    osc.frequency.setValueAtTime(440, now + 0.24);
+    osc.frequency.setValueAtTime(620, now + 0.36);
+
+    // A gentle attack/release envelope so it doesn't click (comfort).
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.linearRampToValueAtTime(0.18, now + 0.02);
+    gain.gain.setValueAtTime(0.18, now + 0.46);
+    gain.gain.linearRampToValueAtTime(0, now + 0.5);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(now);
+    osc.stop(now + 0.5);
+  }
+
+  return { ctx, resume, playSpawn, playGrab, playRelease, playImpact, playKlaxon };
 }

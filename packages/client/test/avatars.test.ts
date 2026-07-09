@@ -372,6 +372,51 @@ describe('Avatars (B8)', () => {
   });
 
   // -------------------------------------------------------------------------
+  // Task C17 (F7 Titan Protocol) — presence playerScale reaches the avatar tiers.
+  describe('playerScale (Titan)', () => {
+    it('a non-titan avatar (no playerScale) is byte-identical: scale stays 1 (parity)', () => {
+      avatars.upsert(makePlayer());
+      const head = findByName(scene, 'avatar-head-p1')!;
+      expect(head.scale.x).toBe(1);
+      expect(head.scale.y).toBe(1);
+      expect(head.scale.z).toBe(1);
+    });
+
+    it('scales head + hands + ring by presence playerScale', () => {
+      avatars.upsert(makePlayer({ playerScale: 5 }));
+      const head = findByName(scene, 'avatar-head-p1')!;
+      const hand0 = findByName(scene, 'avatar-hand0-p1')!;
+      const ring = findByName(scene, 'avatar-ring-p1')!;
+      expect(head.scale.x).toBeCloseTo(5);
+      expect(hand0.scale.x).toBeCloseTo(5);
+      expect(ring.scale.x).toBeCloseTo(5);
+    });
+
+    it('setPlayerScale updates a live avatar (the PLAYER_SCALE broadcast path)', () => {
+      avatars.upsert(makePlayer());
+      avatars.setPlayerScale('p1', 5);
+      const head = findByName(scene, 'avatar-head-p1')!;
+      expect(head.scale.x).toBeCloseTo(5);
+      // Revert back to 1.
+      avatars.setPlayerScale('p1', 1);
+      expect(head.scale.x).toBeCloseTo(1);
+    });
+
+    it('CLAMPS the nameplate scale for a 10× titan (legibility — never blots the screen)', () => {
+      avatars.upsert(makePlayer({ playerScale: 10 }));
+      const head = findByName(scene, 'avatar-head-p1')!;
+      const nameplate = findByName(scene, 'avatar-nameplate-p1')!;
+      expect(head.scale.x).toBeCloseTo(10); // head grows fully
+      expect(nameplate.scale.x).toBeLessThan(head.scale.x); // nameplate clamped
+      expect(nameplate.scale.x).toBeLessThanOrEqual(1.6 + 1e-6);
+    });
+
+    it('setPlayerScale is a no-op for an unknown id', () => {
+      expect(() => avatars.setPlayerScale('nobody', 5)).not.toThrow();
+    });
+  });
+
+  // -------------------------------------------------------------------------
   describe('multiple players', () => {
     it('creates separate avatar sets for different player ids', () => {
       avatars.upsert(makePlayer({ id: 'p1', name: 'Alice' }));

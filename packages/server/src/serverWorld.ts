@@ -14,6 +14,8 @@ import {
   type RenderMode,
   stepBody,
   type PhysicsBody,
+  type PhysicsParams,
+  DEFAULT_PARAMS,
   clampScale,
   isFiniteVec3,
   isFiniteNumber,
@@ -30,6 +32,17 @@ export class ServerWorld {
   private _shapes: NetShape[] = [];
   /** Internal counter used to seed bobPhase/rotSpeed deterministically when not provided. */
   private _spawnCounter = 0;
+  /**
+   * Task C5 — §6.4 eviction invariant. Ids of PINNED bodies (Encore orb, siege
+   * crystal, TK-pulled / timeline-critical shapes). A pinned body is NEVER evicted
+   * by the `maxShapes` recycle-oldest cap — the eviction picks the oldest shape
+   * that is BOTH ungrabbed AND unpinned. C10 (shape-rain) and C16 (siege) EXERCISE
+   * this invariant via `pin()`/`unpin()`; they never re-implement it (spec §6.4).
+   *
+   * A Set of ids (not a per-shape flag) so a pin survives independently of the
+   * NetShape object churn, and so `pin()` may be called before/after a spawn.
+   */
+  private readonly _pinned = new Set<string>();
 
   constructor(opts: ServerWorldOpts) {
     this._maxShapes = opts.maxShapes;
@@ -108,17 +121,32 @@ export class ServerWorld {
       rotation: { x: 0, y: 0, z: 0 },
     };
 
-    // Enforce maxShapes by evicting the oldest UNGRABBED shape. Never evict a
-    // shape a peer is currently holding (finding: eviction could despawn a
-    // held object → its held/release intents become no-ops). If ALL shapes are
-    // grabbed (edge), fall back to evicting the oldest (index 0). Report the
-    // evicted id so the caller can broadcast a despawn (finding #8).
+    // Enforce maxShapes by evicting the oldest shape that is BOTH UNGRABBED and
+    // UNPINNED (§6.4 store-level eviction invariant, C5). Never evict:
+    //   • a shape a peer is currently holding — eviction of a held object would
+    //     make its held/release intents no-ops (the original Phase B finding); and
+    //   • a system-PINNED body (Encore orb, siege crystal, TK-pulled shape) — a
+    //     meteor storm must never despawn the crystal or a defender's held shape.
+    // If EVERY existing shape is grabbed-or-pinned (edge), fall back to evicting
+    // the oldest UNPINNED shape; if even that is empty (all pinned), evict nothing
+    // and let the world briefly exceed the cap rather than despawn a pinned body —
+    // a pinned body is explicitly protected. Report the evicted id so the caller
+    // can broadcast a despawn (finding #8; preserved for the unpinned path).
     let evictedId: string | null = null;
     if (this._shapes.length >= this._maxShapes) {
-      let evictIdx = this._shapes.findIndex((s) => s.grabbedBy === null);
-      if (evictIdx === -1) evictIdx = 0; // all grabbed → evict oldest anyway
-      const [evicted] = this._shapes.splice(evictIdx, 1);
-      if (evicted) evictedId = evicted.id;
+      // Prefer the oldest ungrabbed AND unpinned shape.
+      let evictIdx = this._shapes.findIndex(
+        (s) => s.grabbedBy === null && !this._pinned.has(s.id)
+      );
+      // Fallback: oldest UNPINNED shape (even if grabbed) — still never a pin.
+      if (evictIdx === -1) {
+        evictIdx = this._shapes.findIndex((s) => !this._pinned.has(s.id));
+      }
+      if (evictIdx !== -1) {
+        const [evicted] = this._shapes.splice(evictIdx, 1);
+        if (evicted) evictedId = evicted.id;
+      }
+      // else: all shapes are pinned → evict nothing (never despawn a pin).
     }
 
     this._shapes.push(shape);
@@ -140,6 +168,10 @@ export class ServerWorld {
    * second filter here was redundant with load's).
    */
   restore(shapes: NetShape[]): void {
+    // Pins are transient runtime showpiece state, NEVER persisted (§6.4: showpiece
+    // forces are never captured mid-flight). A restore rebuilds the world from
+    // disk, so clear any stale pins — the restored bodies start unpinned.
+    this._pinned.clear();
     // Clamp to maxShapes (take latest entries)
     const clamped =
       shapes.length <= this._maxShapes ? shapes : shapes.slice(shapes.length - this._maxShapes);
@@ -160,6 +192,33 @@ export class ServerWorld {
 
   remove(id: string): void {
     this._shapes = this._shapes.filter((s) => s.id !== id);
+    // A removed shape's pin is meaningless — clear it so a recycled id can't
+    // inherit a stale pin (ids are room-unique + monotonic, but stay defensive).
+    this._pinned.delete(id);
+  }
+
+  // ---------------------------------------------------------------------------
+  // pin / unpin — §6.4 eviction invariant (Task C5)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Pin a shape so the `maxShapes` recycle-oldest cap NEVER evicts it (§6.4).
+   * Idempotent; pinning an absent id is allowed (the pin applies if/when that id
+   * is later present — but callers pin AFTER spawning the protected body). Used
+   * for the Encore orb, the siege crystal (server-pinned), and TK-pulled shapes.
+   */
+  pin(id: string): void {
+    this._pinned.add(id);
+  }
+
+  /** Un-pin a shape, re-exposing it to eviction (§6.4). Idempotent. */
+  unpin(id: string): void {
+    this._pinned.delete(id);
+  }
+
+  /** True iff `id` is currently pinned (exposed for tests / the RoomHandle). */
+  isPinned(id: string): boolean {
+    return this._pinned.has(id);
   }
 
   // ---------------------------------------------------------------------------
@@ -264,7 +323,17 @@ export class ServerWorld {
   // step — physics tick
   // ---------------------------------------------------------------------------
 
-  step(dt: number): { impacts: Array<{ id: string; speed: number }>; removed: string[] } {
+  /**
+   * Advance the world by `dt`. `params` (C10 single-overlay host) is the effective
+   * PhysicsParams the sim steps under — the merged base+overlay from the timeline
+   * host. It DEFAULTS to DEFAULT_PARAMS so every existing caller (and Phase B
+   * parity) is bit-identical: the default path executes stepBody's original
+   * instruction sequence exactly (C6 parity goldens).
+   */
+  step(
+    dt: number,
+    params: PhysicsParams = DEFAULT_PARAMS
+  ): { impacts: Array<{ id: string; speed: number }>; removed: string[] } {
     const impacts: Array<{ id: string; speed: number }> = [];
     const removed: string[] = [];
 
@@ -279,7 +348,7 @@ export class ServerWorld {
         grounded: shape.grounded,
       };
 
-      const result = stepBody(body, dt);
+      const result = stepBody(body, dt, params);
 
       // Write back mutable physics state (stepBody mutated body.position/velocity/grounded in-place,
       // but we passed the same object references so they're already updated; write grounded explicitly)

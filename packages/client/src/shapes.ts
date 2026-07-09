@@ -180,9 +180,16 @@ export function applyRenderModeVisibility(shape: ClientShape): void {
  * NOTE: bobPhase advancement (bobPhase += delta * 2) is the caller's / physics'
  * job in the original loop; here we read bobPhase as-is so this stays pure w.r.t.
  * simulation state and only touches THREE render handles.
+ *
+ * `frozen` (C11 freeze render-pause, Tier 1 — spec §5.6/§7.3): while the world is
+ * frozen (effectiveParams.freeze via ENV_STATE), the AUTONOMOUS ROTATION is SKIPPED
+ * so a frozen world is fully static. `frozen` defaults to false → when NOT frozen
+ * the behavior is BYTE-IDENTICAL to Phase B (no rendering regression). The bob
+ * READ (position from bobPhase) is unchanged; bobPhase ADVANCE is gated separately
+ * in {@link advanceShapeBob} (the gameLoop's `bobPhase += delta * 2`).
  */
-export function updateShapeRender(shape: ClientShape, delta: number): void {
-  if (shape.grabbedBy === null) {
+export function updateShapeRender(shape: ClientShape, delta: number, frozen = false): void {
+  if (!frozen && shape.grabbedBy === null) {
     shape.group.rotation.x += shape.rotSpeed.x * delta;
     shape.group.rotation.y += shape.rotSpeed.y * delta;
     shape.group.rotation.z += shape.rotSpeed.z * delta;
@@ -193,6 +200,17 @@ export function updateShapeRender(shape: ClientShape, delta: number): void {
   }
 
   applyRenderMode(shape, shape.renderMode);
+}
+
+/**
+ * Advance a shape's autonomous bob phase (the gameLoop's `bobPhase += delta * 2`),
+ * the SECOND half of the C11 freeze render-pause. Advances ONLY when grounded AND
+ * NOT frozen (spec §5.6/§7.3 — a frozen world's bob is banked, not advanced).
+ * `frozen` defaults to false so the un-frozen path is byte-identical to Phase B.
+ * Extracted from main.ts's gameLoop so the freeze gate is a single tested seam.
+ */
+export function advanceShapeBob(shape: ClientShape, delta: number, frozen = false): void {
+  if (!frozen && shape.grounded) shape.bobPhase += delta * 2;
 }
 
 /**

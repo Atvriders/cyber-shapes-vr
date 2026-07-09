@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { Room } from '../src/room.js';
 import { RoomManager, MAX_ROOMS } from '../src/roomManager.js';
 import type { PlayerInfo } from '@cyber-shapes/shared';
-import { MAX_PLAYERS, MAX_SHAPES } from '@cyber-shapes/shared';
+import { MAX_PLAYERS, MAX_SHAPES, DEFAULT_PARAMS } from '@cyber-shapes/shared';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -41,6 +41,30 @@ describe('Room — player capacity', () => {
     expect(room.isEmpty).toBe(true);
     room.addPlayer(makePlayerInfo('p0', 0));
     expect(room.isEmpty).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Room — snapshotFor carries the STANDING baseParams (C22 carry #1:
+// laws-chip-on-join). The welcome/join snapshot must carry the room's elected
+// (or DEFAULT) base law ADDITIVELY, alongside the existing shapes/players
+// fields — the desktop HUD paints the laws chip from THIS on join, before any
+// VOTE_RESULT ever arrives.
+// ---------------------------------------------------------------------------
+
+describe('Room — snapshotFor carries the STANDING baseParams (welcome additive field)', () => {
+  it('includes the caller-supplied baseParams verbatim on the welcome message', () => {
+    const room = makeRoom();
+    const lowG = { ...DEFAULT_PARAMS, gravity: { x: 0, y: -1.2, z: 0 } };
+    const msg = room.snapshotFor('p0', lowG);
+    expect(msg.t).toBe('welcome');
+    expect((msg as { baseParams?: unknown }).baseParams).toEqual(lowG);
+  });
+
+  it('defaults to DEFAULT_PARAMS when no elected law stands', () => {
+    const room = makeRoom();
+    const msg = room.snapshotFor('p0', DEFAULT_PARAMS);
+    expect((msg as { baseParams?: unknown }).baseParams).toEqual(DEFAULT_PARAMS);
   });
 });
 
@@ -522,5 +546,192 @@ describe('RoomManager — MAX_ROOMS cap (finding #6)', () => {
     // Second joiner to the SAME room is fine even though we are at the cap.
     const r = await mgr.join('only-room', 'B', 0);
     expect('error' in r).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase C (Task C0) — additive protocol accommodations (spec §3).
+// Each asserts the NEW field/behavior AND that Phase B behavior is preserved.
+// ---------------------------------------------------------------------------
+
+describe('Room — Phase C accommodation #2: u32 serverTick in the state header', () => {
+  it('every state message carries serverTick, distinct from and independent of seq', () => {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    room.applyIntent('pA', { t: 'spawn', shape: { type: 'cube', position: { x: 0, y: 10, z: 0 } } });
+
+    // Tick once WITHOUT a moving shape scenario is not possible here (it's
+    // falling), so both ticks emit state. serverTick bumps every physics tick.
+    const b1 = room.tick(1 / 60);
+    const b2 = room.tick(1 / 60);
+    const s1 = b1.find((e) => e.t === 'state');
+    const s2 = b2.find((e) => e.t === 'state');
+    expect(s1?.t === 'state' && typeof s1.serverTick === 'number').toBe(true);
+    if (s1?.t === 'state' && s2?.t === 'state') {
+      // serverTick is a physics-tick counter → strictly increases by 1 per tick.
+      expect(s2.serverTick).toBe(s1.serverTick + 1);
+      // It counts ticks from 0: after two ticks it is 2 (seq counts broadcasts).
+      expect(s2.serverTick).toBe(2);
+    }
+  });
+
+  it('serverTick bumps on EVERY tick even when no state is broadcast (quiet room)', () => {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    // No shapes → tick produces no state, but the physics tick still advances.
+    room.tick(1 / 60);
+    room.tick(1 / 60);
+    room.tick(1 / 60);
+    expect(room.serverTick).toBe(3);
+  });
+});
+
+describe('Room — Phase C accommodation #3: impactSpeed on the physics-step state broadcast', () => {
+  it('carries per-shape impactSpeed `s` on the tick a shape strikes the floor, and only then', () => {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    // Spawn just above the rest plane with a downward push so it lands fast.
+    const spawnEvts = room.applyIntent('pA', {
+      t: 'spawn',
+      shape: { type: 'cube', position: { x: 0, y: 3, z: 0 } },
+    });
+    const shapeId = spawnEvts[0].t === 'spawn' ? spawnEvts[0].shape.id : '';
+
+    // Advance until the shape reports an impact (`s` present on its state entry).
+    let sawImpact = false;
+    for (let i = 0; i < 400 && !sawImpact; i++) {
+      const broadcasts = room.tick(1 / 60);
+      const state = broadcasts.find((e) => e.t === 'state');
+      if (state?.t === 'state') {
+        const entry = state.shapes.find((s) => s.id === shapeId);
+        if (entry && entry.s !== undefined) {
+          sawImpact = true;
+          // impactSpeed is the pre-bounce |vy| at the moment of contact (> 0.5 threshold).
+          expect(entry.s).toBeGreaterThan(0.5);
+        }
+      }
+    }
+    expect(sawImpact, 'a falling shape should report impactSpeed on the contact tick').toBe(true);
+  });
+
+  it('a shape merely floating (no floor contact) never carries `s`', () => {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    // Grab-hold a shape so it never integrates/contacts the floor.
+    const spawnEvts = room.applyIntent('pA', {
+      t: 'spawn',
+      shape: { type: 'cube', position: { x: 0, y: 5, z: 0 } },
+    });
+    const shapeId = spawnEvts[0].t === 'spawn' ? spawnEvts[0].shape.id : '';
+    room.applyIntent('pA', { t: 'grab', id: shapeId });
+
+    const broadcasts = room.tick(1 / 60);
+    const state = broadcasts.find((e) => e.t === 'state');
+    expect(state).toBeDefined();
+    if (state?.t === 'state') {
+      const entry = state.shapes.find((s) => s.id === shapeId);
+      expect(entry?.s).toBeUndefined();
+    }
+  });
+});
+
+describe('Room — Phase C accommodation #4: broadcastable grab rejection (additive; off by default)', () => {
+  function setup(): { room: Room; shapeId: string } {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    room.addPlayer(makePlayerInfo('pB', 1));
+    const spawnEvts = room.applyIntent('pA', {
+      t: 'spawn',
+      shape: { type: 'cube', position: { x: 0, y: 5, z: 0 } },
+    });
+    const shapeId = spawnEvts[0].t === 'spawn' ? spawnEvts[0].shape.id : '';
+    return { room, shapeId };
+  }
+
+  it('DEFAULT (off): a losing grab still returns [] — Phase B behavior preserved', () => {
+    const { room, shapeId } = setup();
+    room.applyIntent('pA', { t: 'grab', id: shapeId });
+    const evts = room.applyIntent('pB', { t: 'grab', id: shapeId });
+    expect(evts).toHaveLength(0);
+  });
+
+  it('when enabled: a losing grab ALSO returns a broadcastable grab-rejected event', () => {
+    const { room, shapeId } = setup();
+    room.setBroadcastGrabRejections(true);
+    room.applyIntent('pA', { t: 'grab', id: shapeId }); // pA wins
+    const evts = room.applyIntent('pB', { t: 'grab', id: shapeId }); // pB loses
+    expect(evts).toHaveLength(1);
+    expect(evts[0]).toMatchObject({ t: 'grab-rejected', id: shapeId, peerId: 'pB', by: 'pA' });
+  });
+
+  it('when enabled: a winning grab is UNCHANGED (a plain grab event, no rejection)', () => {
+    const { room, shapeId } = setup();
+    room.setBroadcastGrabRejections(true);
+    const evts = room.applyIntent('pA', { t: 'grab', id: shapeId });
+    expect(evts).toHaveLength(1);
+    expect(evts[0]).toMatchObject({ t: 'grab', id: shapeId, peerId: 'pA' });
+  });
+
+  it('when enabled: a grab on an ABSENT shape still returns [] (no phantom rejection)', () => {
+    const { room } = setup();
+    room.setBroadcastGrabRejections(true);
+    const evts = room.applyIntent('pB', { t: 'grab', id: 'no-such-shape' });
+    expect(evts).toHaveLength(0);
+  });
+
+  it('when enabled: re-grabbing a shape you ALREADY hold returns a plain grab (no self-rejection)', () => {
+    const { room, shapeId } = setup();
+    room.setBroadcastGrabRejections(true);
+    room.applyIntent('pA', { t: 'grab', id: shapeId });
+    const evts = room.applyIntent('pA', { t: 'grab', id: shapeId });
+    expect(evts).toHaveLength(1);
+    expect(evts[0]).toMatchObject({ t: 'grab', id: shapeId, peerId: 'pA' });
+  });
+});
+
+describe('Room — Phase C accommodation #5: release events carry server-computed {pos, vel}', () => {
+  it('a successful release returns a grab-null event with pos + vel from the authoritative world', () => {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    const spawnEvts = room.applyIntent('pA', {
+      t: 'spawn',
+      shape: { type: 'cube', position: { x: 0, y: 5, z: 0 } },
+    });
+    const shapeId = spawnEvts[0].t === 'spawn' ? spawnEvts[0].shape.id : '';
+    room.applyIntent('pA', { t: 'grab', id: shapeId });
+
+    const releaseVel = { x: 1, y: 2, z: 3 };
+    const releasePos = { x: 4, y: 5, z: 6 };
+    const evts = room.applyIntent('pA', {
+      t: 'release',
+      id: shapeId,
+      velocity: releaseVel,
+      position: releasePos,
+      rotation: { x: 0, y: 0, z: 0 },
+    });
+    expect(evts).toHaveLength(1);
+    const evt = evts[0];
+    expect(evt).toMatchObject({ t: 'grab', id: shapeId, peerId: null });
+    if (evt.t === 'grab') {
+      // Additive fields carry the authoritative post-release transform.
+      expect(evt.pos).toEqual(releasePos);
+      expect(evt.vel).toEqual(releaseVel);
+    }
+  });
+
+  it('a GRAB event (peerId non-null) does NOT carry pos/vel — additive only on release', () => {
+    const room = makeRoom();
+    room.addPlayer(makePlayerInfo('pA', 0));
+    const spawnEvts = room.applyIntent('pA', {
+      t: 'spawn',
+      shape: { type: 'cube', position: { x: 0, y: 5, z: 0 } },
+    });
+    const shapeId = spawnEvts[0].t === 'spawn' ? spawnEvts[0].shape.id : '';
+    const evts = room.applyIntent('pA', { t: 'grab', id: shapeId });
+    const evt = evts[0];
+    if (evt.t === 'grab') {
+      expect(evt.pos).toBeUndefined();
+      expect(evt.vel).toBeUndefined();
+    }
   });
 });

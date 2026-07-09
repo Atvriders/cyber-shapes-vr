@@ -133,12 +133,14 @@ describe('initAudio()', () => {
     expect(audio.ctx).toBe(mockCtxInstance);
   });
 
-  it('exposes resume, playSpawn, playGrab, playRelease, playImpact', () => {
+  it('exposes resume, playSpawn, playGrab, playRelease, playImpact, playKlaxon', () => {
     expect(typeof audio.resume).toBe('function');
     expect(typeof audio.playSpawn).toBe('function');
     expect(typeof audio.playGrab).toBe('function');
     expect(typeof audio.playRelease).toBe('function');
     expect(typeof audio.playImpact).toBe('function');
+    // Task C10: the in-headset countdown klaxon (spec §7.2).
+    expect(typeof audio.playKlaxon).toBe('function');
   });
 
   describe('when ctx.state === "suspended" (before user gesture)', () => {
@@ -169,6 +171,11 @@ describe('initAudio()', () => {
     it('playImpact(v) with argument does NOT throw', () => {
       expect(() => audio.playImpact(0.9)).not.toThrow();
       expect(mockCtxInstance.bufferSourcesCreated).toBe(0);
+    });
+
+    it('playKlaxon() does NOT throw and creates no oscillator (C10)', () => {
+      expect(() => audio.playKlaxon()).not.toThrow();
+      expect(mockCtxInstance.oscillatorsCreated).toBe(0);
     });
   });
 
@@ -203,6 +210,12 @@ describe('initAudio()', () => {
     it('playImpact(v) accepts optional velocity argument without throwing', () => {
       expect(() => audio.playImpact(0.5)).not.toThrow();
       expect(mockCtxInstance.bufferSourcesCreated).toBe(1);
+    });
+
+    it('playKlaxon() creates the two-tone alarm oscillator + gain (C10)', () => {
+      audio.playKlaxon();
+      expect(mockCtxInstance.oscillatorsCreated).toBe(1);
+      expect(mockCtxInstance.gainNodesCreated).toBeGreaterThanOrEqual(1);
     });
   });
 

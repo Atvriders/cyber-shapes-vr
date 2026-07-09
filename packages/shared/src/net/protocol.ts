@@ -1,6 +1,7 @@
 import type { ClientMsg, ServerMsg, Vec3 } from './types.js';
 import type { ShapeType, RenderMode } from '../types.js';
 import { SHAPE_TYPES, RENDER_MODES, CYBER_COLORS } from '../constants.js';
+import { validateGlyph } from '../glyphs.js';
 
 // ---------------------------------------------------------------------------
 // Voice opcode constants
@@ -87,6 +88,18 @@ export function validateClientMsg(msg: unknown): boolean {
 
   switch (m['t']) {
     case 'join':
+      // Phase C (Task C2): the new tier-negotiation fields are all OPTIONAL and
+      // only type-checked when present (their SEMANTIC validation — is this a
+      // real tier? a valid secret? an in-range wordlist index? — happens in the
+      // connection layer, which downgrades rather than rejects). A malformed
+      // TYPE (e.g. tier:42, requestedName:"x") is rejected here so it can never
+      // reach the tier gate as an unexpected shape.
+      if (m['tier'] !== undefined && typeof m['tier'] !== 'string') return false;
+      if (m['joinSecret'] !== undefined && typeof m['joinSecret'] !== 'string') return false;
+      if (m['requestedName'] !== undefined && !isFiniteNumber(m['requestedName'])) return false;
+      // Task C4: the staff ownerToken is OPTIONAL; only type-check when present
+      // (semantic auth — is it the right token? — happens in the connection layer).
+      if (m['ownerToken'] !== undefined && typeof m['ownerToken'] !== 'string') return false;
       return (
         typeof m['room'] === 'string' &&
         typeof m['name'] === 'string' &&
@@ -116,7 +129,35 @@ export function validateClientMsg(msg: unknown): boolean {
     }
 
     case 'grab':
+      // Task C16: the OPTIONAL `clientTimestamp` (lag-comp anchor for a siege
+      // catch — §7.6) + the OPTIONAL `grabPoint` (the hand position at grab). Only
+      // type-checked when present; a bare Phase B grab omits both. A non-numeric
+      // timestamp / non-finite grabPoint is rejected so the rewind distance math
+      // never sees a poisoned NaN.
+      if (m['clientTimestamp'] !== undefined && !isFiniteNumber(m['clientTimestamp'])) return false;
+      if (m['grabPoint'] !== undefined && !isFiniteVec3(m['grabPoint'])) return false;
       return typeof m['id'] === 'string';
+
+    case 'met-launch':
+      // Task C16: a slingshot MET_LAUNCH. The origin + aim must be finite Vec3s (a
+      // NaN would poison the launch-velocity math). `power` is a number but its
+      // VALUE is never trusted (the server clamps the speed to 6–8 m/s); reject a
+      // non-number so the handler always sees a numeric power to clamp. colorIndex
+      // is an optional palette int.
+      if (!isFiniteVec3(m['origin'])) return false;
+      if (!isFiniteVec3(m['aim'])) return false;
+      if (m['power'] !== undefined && typeof m['power'] !== 'number') return false;
+      if (m['colorIndex'] !== undefined && !isValidColorIndex(m['colorIndex'])) return false;
+      return true;
+
+    case 'met-hit':
+      // Task C16: a client-claimed swat. `meteorId` a string, `handPoint` a finite
+      // Vec3, `clientTimestamp` a finite number (the rewind anchor). The server
+      // plausibility-checks it against the rewind buffer.
+      if (typeof m['meteorId'] !== 'string') return false;
+      if (!isFiniteVec3(m['handPoint'])) return false;
+      if (!isFiniteNumber(m['clientTimestamp'])) return false;
+      return true;
 
     case 'release':
       return (
@@ -154,6 +195,81 @@ export function validateClientMsg(msg: unknown): boolean {
 
     case 'voice-config':
       return typeof m['config'] === 'string';
+
+    case 'director-cmd':
+      // Task C4: `cmd` is a required verb string; the optional target/confirm
+      // fields are only type-checked when present. The AUTHORIZATION (did this
+      // connection present the ownerToken?) is a connection-layer concern.
+      if (typeof m['cmd'] !== 'string') return false;
+      if (m['targetId'] !== undefined && typeof m['targetId'] !== 'string') return false;
+      if (m['confirm'] !== undefined && typeof m['confirm'] !== 'boolean') return false;
+      // Task C10: FIRE carries a cueId + a client-generated cueInstanceId (the
+      // server dedupes on it). HOLD carries an optional holdMs. Type-check when present.
+      if (m['cueId'] !== undefined && typeof m['cueId'] !== 'string') return false;
+      if (m['cueInstanceId'] !== undefined && typeof m['cueInstanceId'] !== 'string') return false;
+      if (m['holdMs'] !== undefined && (typeof m['holdMs'] !== 'number' || !isFinite(m['holdMs'] as number)))
+        return false;
+      return true;
+
+    case 'glyph-add':
+      // Task C12: a crowd-scribe glyph. The full bounds/count/finite/color check
+      // lives in the shared, pure validateGlyph (also used server-side) so the
+      // wire boundary and the admission gate agree exactly. Rejects a hostile
+      // over-length / NaN / free-text-color stroke before it reaches the manager.
+      return validateGlyph(m);
+
+    case 'wisp-pulse':
+      // Task C14: a wisp fires a server-clamped pulse. The epicenter must be a
+      // finite Vec3 (a NaN/Infinity position could poison applyRadialImpulse's
+      // distance math). `magnitude` must be a number — but its VALUE is never
+      // trusted (the server clamps it); a non-number is rejected here so the
+      // handler always sees a numeric magnitude to clamp.
+      if (!isFiniteVec3(m['pos'])) return false;
+      if (typeof m['magnitude'] !== 'number') return false;
+      return true;
+
+    case 'reel-bank':
+    case 'reel-list':
+      // Task C22 (F10 Ghost Arcade): a staff/stage REEL verb with no payload. The
+      // CAPABILITY gate (director/ownerToken for bank; spectator/director for list)
+      // is a connection-layer concern — never trusted from the client.
+      return true;
+
+    case 'reel-play':
+      // Task C22: fetch a banked reel for ATTRACT playback. `reelId` is OPTIONAL
+      // (absent → the most-recent banked reel); length-capped so a hostile mega-id
+      // never reaches the bank lookup.
+      if (m['reelId'] !== undefined && (typeof m['reelId'] !== 'string' || (m['reelId'] as string).length > 128))
+        return false;
+      return true;
+
+    case 'vote-cast':
+      // Task C15: a ballot casts for a dial-cue-id `option`. It must be a string
+      // (the election reducer rejects an unlisted option — the ballot enumerates
+      // the real ids), and length-capped so a hostile mega-string never reaches
+      // the reducer's option lookup.
+      if (typeof m['option'] !== 'string') return false;
+      if ((m['option'] as string).length > 64) return false;
+      return true;
+
+    case 'build':
+      // Task C34 (F23 The Workshop): a BUILD op. `kind` MUST be a finite number
+      // (the BUILD_KIND discriminant); the optional correlation `opId` + string
+      // fields are length-capped here so a hostile mega-string never reaches the
+      // handler. The PER-KIND payload (transform/layout/glyph shape) is validated
+      // in the server handler where the capability + build-mode gates also live —
+      // this wire check only bounds the envelope. The CAPABILITY gate (resident +
+      // ownerToken) is a connection-layer concern, never trusted from the client.
+      if (typeof m['kind'] !== 'number' || !isFiniteNumber(m['kind'])) return false;
+      if (m['opId'] !== undefined && (typeof m['opId'] !== 'string' || (m['opId'] as string).length > 64))
+        return false;
+      if (m['id'] !== undefined && (typeof m['id'] !== 'string' || (m['id'] as string).length > 128))
+        return false;
+      if (m['name'] !== undefined && (typeof m['name'] !== 'string' || (m['name'] as string).length > 64))
+        return false;
+      if (m['color'] !== undefined && typeof m['color'] !== 'string') return false;
+      if (m['points'] !== undefined && !Array.isArray(m['points'])) return false;
+      return true;
 
     default:
       // Unknown message type — not our job to reject here (dropped downstream).
@@ -295,12 +411,35 @@ export function unpackVoice(buf: ArrayBuffer): {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns true if `data` is a binary voice frame (ArrayBuffer or TypedArray),
- * false for text strings and everything else.
+ * Returns true if `data` is a binary frame (ArrayBuffer or TypedArray), false
+ * for text strings and everything else. NOTE: this is a binary-vs-text
+ * discriminator — it does NOT inspect the opcode. Use `isVoiceOpcode` /
+ * `voiceOpcodeOf` to distinguish a voice frame from other binary families.
  */
 export function isVoiceFrame(data: unknown): boolean {
   if (data instanceof ArrayBuffer) return true;
   // Optionally treat typed arrays as binary frames too
   if (ArrayBuffer.isView(data)) return true;
   return false;
+}
+
+/**
+ * Phase C accommodation #1 (spec §3, C0 — unknown-opcode ignore for binary):
+ * the first byte of every binary frame is its opcode (Appendix B's
+ * "first-byte-is-opcode demux"). Phase B voice frames use 0x10–0x12; Phase C
+ * mints 0x20–0x3F. A frame whose first byte is NOT a known voice opcode must be
+ * IGNORED, not decoded as voice. Returns true only for the three voice opcodes.
+ */
+export function isVoiceOpcode(opcode: number): boolean {
+  return opcode === VOICE_OPUS || opcode === VOICE_WEBM || opcode === VOICE_PCM;
+}
+
+/**
+ * Read the leading opcode byte of a binary frame, or null if the frame is empty.
+ * The one place first-byte demux is centralized (server relay + client receive
+ * both route through the shared codec — no locally-invented opcode reads).
+ */
+export function voiceOpcodeOf(buf: ArrayBuffer): number | null {
+  if (buf.byteLength < 1) return null;
+  return new DataView(buf).getUint8(0);
 }

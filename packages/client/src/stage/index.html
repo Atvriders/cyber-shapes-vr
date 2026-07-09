@@ -1,0 +1,262 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Cyber Shapes — Neon Director</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100vw;
+        height: 100vh;
+        overflow: hidden;
+        background: #05010a;
+        font-family: 'Courier New', 'Lucida Console', monospace;
+        color: #fff;
+      }
+      /* The WebGL canvas fills the screen; the render governor caps its INTERNAL
+         resolution and upscales via width/height:100%. */
+      #stage-canvas {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+      }
+      #stage-canvas canvas {
+        display: block;
+        width: 100%;
+        height: 100%;
+      }
+      /* Overlay chrome sits above the canvas and never intercepts pointer events. */
+      #stage-root {
+        position: absolute;
+        inset: 0;
+        z-index: 10;
+        pointer-events: none;
+      }
+      .stage-overlays {
+        position: absolute;
+        inset: 0;
+      }
+      /* 5-METER LEGIBLE type (spec §7.1): oversized, high-contrast, glow. */
+      .stage-banner {
+        position: absolute;
+        top: 4vh;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 3.4vw;
+        font-weight: bold;
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        color: #0ff;
+        text-shadow:
+          0 0 12px #0ff,
+          0 0 32px #00aaff;
+        text-align: center;
+      }
+      /* Slot color-coding so staff can eyeball which slot owns the banner. */
+      .stage-banner[data-slot='replay'] {
+        color: #ff0;
+        text-shadow:
+          0 0 12px #ff0,
+          0 0 32px #ffaa00;
+      }
+      .stage-banner[data-slot='cue'] {
+        color: #ff00ff;
+        text-shadow:
+          0 0 12px #ff00ff,
+          0 0 32px #ff00ff;
+      }
+      .stage-lower-third {
+        position: absolute;
+        left: 3vw;
+        bottom: 8vh;
+        display: flex;
+        align-items: center;
+        gap: 1.2vw;
+        font-size: 2.6vw;
+        font-weight: bold;
+        letter-spacing: 0.1em;
+        text-transform: uppercase;
+        color: #fff;
+        text-shadow: 0 0 10px #0ff;
+        padding: 0.6vw 1.2vw;
+        background: rgba(0, 0, 0, 0.5);
+        border-left: 0.5vw solid #0ff;
+      }
+      .lower-third-swatch {
+        width: 2vw;
+        height: 2vw;
+        display: inline-block;
+        border: 2px solid #fff;
+        box-shadow: 0 0 10px currentColor;
+      }
+      /* PATTERN redundancy — color is never the only signal (§6.1). */
+      .lower-third-swatch[data-pattern='stripe'] {
+        background-image: repeating-linear-gradient(
+          45deg,
+          rgba(0, 0, 0, 0.6) 0,
+          rgba(0, 0, 0, 0.6) 3px,
+          transparent 3px,
+          transparent 6px
+        );
+      }
+      .lower-third-swatch[data-pattern='dot'] {
+        background-image: radial-gradient(rgba(0, 0, 0, 0.6) 30%, transparent 32%);
+        background-size: 6px 6px;
+      }
+      .lower-third-swatch[data-pattern='grid'] {
+        background-image:
+          linear-gradient(rgba(0, 0, 0, 0.6) 1px, transparent 1px),
+          linear-gradient(90deg, rgba(0, 0, 0, 0.6) 1px, transparent 1px);
+        background-size: 5px 5px;
+      }
+      .stage-qr {
+        position: absolute;
+        right: 3vw;
+        bottom: 8vh;
+        padding: 1.2vw;
+        border: 0.3vw dashed #ff00ff;
+        color: #ff00ff;
+        text-align: center;
+        font-size: 1.2vw;
+        letter-spacing: 0.1em;
+        /* Glow may PULSE; the code geometry never scales/warps (§7.1). */
+        animation: qrGlow 2.4s ease-in-out infinite;
+      }
+      .stage-qr[data-ask-staff='true'] {
+        border-style: solid;
+        color: #ff5555;
+        animation: none;
+      }
+      @keyframes qrGlow {
+        0%,
+        100% {
+          box-shadow: 0 0 12px rgba(255, 0, 255, 0.4);
+        }
+        50% {
+          box-shadow: 0 0 28px rgba(255, 0, 255, 0.9);
+        }
+      }
+      /* §14-gated counter — the overlay module hides it unless the gate is green. */
+      .stage-counter {
+        position: absolute;
+        bottom: 2vh;
+        left: 50%;
+        transform: translateX(-50%);
+        font-size: 1.6vw;
+        letter-spacing: 0.22em;
+        color: #0ff;
+        text-shadow: 0 0 10px #0ff;
+        opacity: 0.85;
+      }
+      [hidden] {
+        display: none !important;
+      }
+
+      /* -----------------------------------------------------------------
+         C29 F18 X-Ray Broadcast (spec §7.18) — the split-truth netcode
+         diagnostic overlay. `data-scale="5m"` chrome MUST read from 5 m
+         (spec: "else it reads as a debug overlay left on") — oversized,
+         glowing, high-contrast, the SAME neon language as .stage-banner /
+         .stage-lower-third above. The numeric HUD strip is the explicit
+         §7.1 close-range exemption for this narrated inspection mode and
+         stays small. Every region below is placed in its OWN band so it
+         never collides with .stage-banner (top 4vh) or .stage-counter /
+         .stage-lower-third / .stage-qr (bottom 2–14vh).
+      ----------------------------------------------------------------- */
+      .stage-xray {
+        position: absolute;
+        inset: 0;
+        z-index: 20; /* the diagnostic takeover paints above normal chrome */
+      }
+      [data-scale='5m'] {
+        font-weight: bold;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        text-align: center;
+      }
+      [data-scale='close-range'] {
+        font-weight: normal;
+        text-transform: none;
+      }
+      /* The oversized header bar — its own thin strip ABOVE .stage-banner. */
+      .stage-xray-header {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 3vh;
+        line-height: 3vh;
+        overflow: hidden;
+        font-size: 2vw;
+        letter-spacing: 0.22em;
+        color: #ff2b6e;
+        background: rgba(10, 0, 8, 0.78);
+        border-bottom: 0.22vw solid #ff2b6e;
+        text-shadow:
+          0 0 12px #ff2b6e,
+          0 0 34px #ff0055;
+      }
+      /* The three split-truth claim banners: a labeled 3-column row, each
+         with its own horizontal anchor so they never collapse onto one spot. */
+      .stage-xray-truth,
+      .stage-xray-sees,
+      .stage-xray-ghost {
+        position: absolute;
+        top: 15vh;
+        width: 30vw;
+        font-size: 2vw;
+        padding: 0.5vh 0;
+        border-top: 0.2vw solid currentColor;
+      }
+      .stage-xray-truth {
+        left: 2vw;
+        color: #0ff;
+        text-shadow:
+          0 0 12px #0ff,
+          0 0 28px #00aaff;
+      }
+      .stage-xray-sees {
+        left: 50%;
+        transform: translateX(-50%);
+        color: #ccff00;
+        text-shadow:
+          0 0 12px #ccff00,
+          0 0 28px #aaff00;
+      }
+      .stage-xray-ghost {
+        right: 2vw;
+        color: #ff3355;
+        text-shadow:
+          0 0 12px #ff3355,
+          0 0 28px #ff0033;
+      }
+      /* The numeric HUD chip strip (§7.1 close-range exemption) — small,
+         legible up close, never 5-meter scale. */
+      .stage-xray-hud {
+        position: absolute;
+        top: 21vh;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: 90vw;
+        font-size: 1vw;
+        letter-spacing: 0.06em;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.35);
+        padding: 0.6vh 1vw;
+        text-align: center;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage-canvas"></div>
+    <div id="stage-root"></div>
+    <script type="module" src="./stage.ts"></script>
+  </body>
+</html>

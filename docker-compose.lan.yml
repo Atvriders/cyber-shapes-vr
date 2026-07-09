@@ -1,0 +1,123 @@
+##############################################################################
+# docker-compose.lan.yml — cyber-shapes-vr LAN-MODE deploy (Task C23)
+#
+# The booth's FALLBACK topology (spec design doc §12 "Topology"): server runs
+# on the booth laptop, headsets + stage + phones join over a travel router's
+# Wi-Fi — no Cloudflare Tunnel, no public internet dependency for the show
+# itself. Use this when the venue has no reliable internet, or as the rehearsed
+# fallback if the tunnel dies mid-event (see RUNBOOK.md → QR Fallback Ladder).
+#
+# WHY a real TLS cert is still required (not self-signed): WebXR and
+# getUserMedia both require a secure context, and a self-signed cert throws a
+# scary browser warning most walk-up visitors will not click through. The fix
+# is a REAL cert for the SAME domain the cloud deploy answers to, obtained via
+# a DNS-01 ACME challenge (works with ZERO inbound HTTP exposure — unlike
+# HTTP-01, which needs the booth to be reachable from the internet):
+#
+#   DNS-01 cert steps (do this DAYS before the event, not at the booth):
+#     1. Own a real domain (the SAME one the cloud/tunnel deploy uses, e.g.
+#        cybershapes.example.org) with a DNS provider that has an ACME DNS-01
+#        plugin (Cloudflare DNS, Route53, etc. — certbot/acme.sh both support
+#        the common providers via an API token, no manual TXT-record juggling).
+#     2. Run (example with certbot + the Cloudflare DNS plugin):
+#          certbot certonly --dns-cloudflare \
+#            --dns-cloudflare-credentials ~/.secrets/cf.ini \
+#            -d cybershapes.example.org
+#     3. Copy the resulting `fullchain.pem` + `privkey.pem` to the booth laptop
+#        under `./certs/` (see the volume mount below) — this repo's
+#        `.gitignore` should exclude that directory; NEVER commit real certs.
+#     4. Certs are short-lived (Let's Encrypt = 90 days) — renew before a
+#        multi-month gap between events; a same-week renewal is plenty for one
+#        booth day (see RUNBOOK.md preflight `cert-days` check).
+#
+#   Split-horizon DNS (so the SAME domain resolves to the LAN server on booth
+#   Wi-Fi, and to the cloud/tunnel elsewhere):
+#     1. On the travel router, set its DHCP-advertised DNS server to the
+#        router itself (most consumer/travel routers support a local DNS
+#        override / "DNS rebind" or "static DNS entry" feature).
+#     2. Add a static A-record override: `cybershapes.example.org` →
+#        `<booth-laptop's LAN IP>` (e.g. 192.168.1.50) on the router.
+#     3. Any device joining the booth Wi-Fi resolves the domain to the LAN
+#        server; the SAME QR / printed link (same domain, same URL shape)
+#        works both in the cloud deploy and at the booth — no separate
+#        "LAN-mode URL" for visitors to be confused by.
+#     4. If the travel router can't do DNS overrides, fall back to a `/etc/hosts`
+#        style push (MDM profile, or a router-level static-lease + a *.local
+#        mDNS name) — document whichever the venue's hardware actually supports.
+#
+# Usage:
+#   cp .env.lan.example .env.lan   # LAN_URL / TUNNEL_URL / STAFF_KEY / etc.
+#   docker compose -f docker-compose.lan.yml --env-file .env.lan up --build
+#
+# The preflight tool DETECTS LAN mode automatically (packages/server/src/preflight.ts
+# `connectivityMode`): with no reachable TUNNEL_URL and a reachable LAN_URL,
+# `GET /api/preflight` reports `mode: 'lan'` — set TUNNEL_URL to the venue's own
+# offline gateway (or leave the default, which will correctly fail) and LAN_URL
+# to a real LAN host (the travel router's admin page is a fine choice).
+##############################################################################
+
+services:
+  # ── WebSocket + HTTP server (identical image to the cloud deploy) ─────────
+  server:
+    build:
+      context: .
+      dockerfile: Dockerfile.server
+    environment:
+      PORT: '3030'
+      DATA_DIR: /data
+      # C24 audit (MF2): nginx-lan.conf IS a hop in front of this server, so the
+      # socket peer clientIpOf sees at rung 3 is nginx's bridge IP — NOT the real
+      # client. nginx therefore appends the real peer to X-Forwarded-For and strips
+      # any client-forged CF-Connecting-IP, so keying uses clientIpOf rung 2 (the
+      # rightmost XFF hop) with TRUSTED_PROXY_HOPS=0 (nginx is the sole trusted hop).
+      # TRUST_CF_CONNECTING_IP=false: no Cloudflare on a LAN, so the server must NEVER
+      # trust an inbound CF-Connecting-IP (defence-in-depth atop the nginx strip).
+      TRUST_CF_CONNECTING_IP: 'false'
+      TRUSTED_PROXY_HOPS: '0'
+      LAN_URL: '${LAN_URL:-http://192.168.1.1/}'
+      TUNNEL_URL: '${TUNNEL_URL:-https://example.invalid/healthz}'
+      STAFF_KEY: '${STAFF_KEY:-}'
+      CERT_DAYS_REMAINING: '${CERT_DAYS_REMAINING:-90}'
+    volumes:
+      - cyber-shapes-lan-data:/data
+    networks:
+      - internal
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://localhost:3030/healthz']
+      interval: 15s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    restart: unless-stopped
+
+  # ── nginx (static client + WS reverse-proxy + REAL TLS termination) ───────
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    # Same built image as the cloud deploy — only the nginx CONFIG differs
+    # (this file mounts nginx-lan.conf over the image's baked-in nginx.conf).
+    volumes:
+      - ./nginx-lan.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-security-headers.conf:/etc/nginx/security-headers.conf:ro
+      # The DNS-01 cert, pre-provisioned per the steps above. NEVER commit
+      # real certs to the repo — this directory is local-only.
+      - ./certs:/etc/nginx/certs:ro
+    ports:
+      # Both exposed directly on the LAN — no tunnel in front, so nginx itself
+      # terminates TLS (nginx-lan.conf) and redirects 80 → 443.
+      - '80:80'
+      - '443:443'
+    networks:
+      - internal
+    depends_on:
+      server:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  cyber-shapes-lan-data:
+
+networks:
+  internal:
+    driver: bridge

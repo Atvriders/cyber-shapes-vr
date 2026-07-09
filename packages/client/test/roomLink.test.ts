@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseRoom, makeRoomId, roomUrl } from '../src/net/roomLink.js';
+import { parseRoom, makeRoomId, roomUrl, parseJoinSecret } from '../src/net/roomLink.js';
 
 describe('parseRoom', () => {
   it('extracts id from a valid /r/<id> path', () => {
@@ -82,5 +82,36 @@ describe('roomUrl', () => {
 
   it('works with a full origin including port', () => {
     expect(roomUrl('https://example.com:3000', 'room1')).toBe('https://example.com:3000/r/room1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseJoinSecret — C7 security fix: extract ?k=<secret> from the room URL
+// so the VR client can forward the HMAC join key to the server.
+// ---------------------------------------------------------------------------
+describe('parseJoinSecret', () => {
+  it('returns the k param from a URL with ?k=<secret>', () => {
+    expect(parseJoinSecret('https://example.com/r/abc123?k=myhmacsecret')).toBe('myhmacsecret');
+  });
+
+  it('returns null when there is no k param', () => {
+    expect(parseJoinSecret('https://example.com/r/abc123')).toBeNull();
+  });
+
+  it('returns null when k param is empty', () => {
+    expect(parseJoinSecret('https://example.com/r/abc123?k=')).toBeNull();
+  });
+
+  it('returns null for an empty string', () => {
+    expect(parseJoinSecret('')).toBeNull();
+  });
+
+  it('returns null for a malformed URL (no scheme)', () => {
+    // A relative path with no origin — URL constructor throws, returns null.
+    expect(parseJoinSecret('/r/room?k=secret')).toBeNull();
+  });
+
+  it('returns k even when other query params are present', () => {
+    expect(parseJoinSecret('https://x.com/r/room?foo=bar&k=thekey&baz=1')).toBe('thekey');
   });
 });

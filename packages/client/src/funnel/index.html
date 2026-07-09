@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>Cyber Shapes — Enter the Void</title>
+    <style>
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        width: 100%;
+        min-height: 100%;
+        background: #05010a;
+        font-family: 'Courier New', 'Lucida Console', monospace;
+        color: #fff;
+        -webkit-tap-highlight-color: transparent;
+      }
+      #funnel-root {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 18px;
+        padding: 32px 20px calc(32px + env(safe-area-inset-bottom));
+        min-height: 100vh;
+      }
+      .funnel-title,
+      .ballot-title,
+      .crowd-title,
+      .wisp-title,
+      .exit-callsign {
+        color: #0ff;
+        text-shadow:
+          0 0 10px #0ff,
+          0 0 24px #00aaff;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        text-align: center;
+        font-size: 1.4rem;
+        font-weight: bold;
+      }
+      .exit-callsign {
+        color: #ff00ff;
+        text-shadow:
+          0 0 10px #ff00ff,
+          0 0 24px #ff00ff;
+        font-size: 2rem;
+      }
+      button {
+        font-family: inherit;
+        cursor: pointer;
+        border-radius: 6px;
+        text-transform: uppercase;
+        letter-spacing: 0.12em;
+      }
+      .funnel-choice,
+      .wisp-enter,
+      .exit-copy-btn,
+      .crowd-cheer {
+        width: 100%;
+        max-width: 340px;
+        padding: 16px;
+        font-size: 1rem;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #ff00ff;
+        color: #ff00ff;
+        text-shadow: 0 0 8px #ff00ff;
+        box-shadow: 0 0 12px rgba(255, 0, 255, 0.4);
+      }
+      .funnel-choice[data-mode='wisp'] {
+        border-color: #0ff;
+        color: #0ff;
+        text-shadow: 0 0 8px #0ff;
+        box-shadow: 0 0 12px rgba(0, 255, 255, 0.4);
+      }
+      .wisp-words,
+      .wisp-colors {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+        justify-content: center;
+        max-width: 360px;
+      }
+      .wisp-word {
+        padding: 10px 14px;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #0ff;
+        color: #0ff;
+      }
+      .wisp-word[data-selected='true'] {
+        background: #0ff;
+        color: #000;
+      }
+      .wisp-color {
+        width: 40px;
+        height: 40px;
+        border: 2px solid transparent;
+      }
+      .wisp-color[data-selected='true'] {
+        border-color: #fff;
+        box-shadow: 0 0 12px #fff;
+      }
+      .wisp-canvas {
+        width: 100%;
+        max-width: 360px;
+        height: 260px;
+        display: block;
+        margin-top: 12px;
+      }
+      .ballot-status,
+      .crowd-status,
+      .wisp-in-msg,
+      .exit-thanks,
+      .exit-glyph,
+      .exit-copy,
+      .exit-share-copy,
+      .watch-status {
+        text-align: center;
+        color: #0ff;
+        opacity: 0.85;
+        letter-spacing: 0.08em;
+      }
+      /* C25 (F14 The Gallery) — the WATCH permalink chrome. */
+      .watch-counter {
+        text-align: center;
+        color: #ff00ff;
+        text-shadow: 0 0 8px #ff00ff;
+        letter-spacing: 0.12em;
+        font-weight: bold;
+      }
+      .watch-viewport {
+        width: 100%;
+        max-width: 480px;
+        aspect-ratio: 16 / 9;
+        border: 1px solid rgba(0, 255, 255, 0.35);
+        box-shadow: 0 0 18px rgba(0, 255, 255, 0.25);
+      }
+      .watch-rejoin,
+      .watch-share,
+      .exit-share-btn {
+        width: 100%;
+        max-width: 340px;
+        padding: 16px;
+        font-size: 1rem;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid #0ff;
+        color: #0ff;
+        text-shadow: 0 0 8px #0ff;
+        box-shadow: 0 0 12px rgba(0, 255, 255, 0.4);
+      }
+      .watch-entry {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 12px;
+        width: 100%;
+      }
+      .exit-discord-qr {
+        border: 1px dashed #ff00ff;
+        color: #ff00ff;
+        padding: 24px 32px;
+        text-align: center;
+      }
+      .exit-link {
+        color: #0ff;
+        word-break: break-all;
+        text-align: center;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="funnel-root">SCAN TO ENTER THE VOID</div>
+    <script type="module" src="./funnel.ts"></script>
+  </body>
+</html>

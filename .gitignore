@@ -17,7 +17,14 @@ coverage/
 # Local env
 .env
 .env.local
+.env.lan
+
+# LAN-mode DNS-01 TLS certs (docker-compose.lan.yml) — NEVER commit real certs
+certs/
 
 # server runtime persistence output
 data/
 packages/server/data/
+
+# harness artifacts
+.claude/
