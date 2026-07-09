@@ -107,8 +107,11 @@ function createHudPanel(
   const mat = new THREE.MeshBasicMaterial({
     map: texture,
     transparent: true,
-    opacity: 0.7,
-    blending: THREE.AdditiveBlending,
+    opacity: 0.95,
+    // NormalBlending (default): the panel draws as a solid dark box with bright
+    // text, so the label stays legible under the bloom pass. AdditiveBlending
+    // here made the text + glow ADD onto the scene, and bloom then amplified it
+    // into an unreadable white smear (no dark backing to give the text contrast).
     side: THREE.DoubleSide,
     depthWrite: false,
   });
@@ -122,20 +125,22 @@ function createHudPanel(
 
 function drawHudText(ctx: CanvasRenderingContext2D, text: string, w: number, h: number): void {
   ctx.clearRect(0, 0, w, h);
-  // Background
-  ctx.fillStyle = 'rgba(0, 20, 40, 0.4)';
+  // Background — an opaque dark backing so the cyan text has real contrast and
+  // survives the bloom pass (was rgba(0,20,40,0.4): too transparent to read on).
+  ctx.fillStyle = 'rgba(0, 10, 24, 0.92)';
   ctx.fillRect(0, 0, w, h);
   // Border
   ctx.strokeStyle = '#0ff';
   ctx.lineWidth = 2;
   ctx.strokeRect(4, 4, w - 8, h - 8);
-  // Text
-  ctx.fillStyle = '#0ff';
-  ctx.font = 'bold 20px Courier New, monospace';
+  // Text — a modest glow for the neon look, but crisp enough to read (was a
+  // 10px blur that smeared the glyphs once bloom amplified the additive panel).
+  ctx.fillStyle = '#aefcff';
+  ctx.font = 'bold 22px Courier New, monospace';
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
   ctx.shadowColor = '#0ff';
-  ctx.shadowBlur = 10;
+  ctx.shadowBlur = 4;
   ctx.fillText(text, w / 2, h / 2);
   ctx.shadowBlur = 0;
 }
