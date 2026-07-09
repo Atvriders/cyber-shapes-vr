@@ -222,6 +222,20 @@ function init(): void {
   renderer.xr.setFoveation(1);
   document.body.appendChild(renderer.domElement);
 
+  // Controls hint (#controls in index.html): stays fully readable ~20s via CSS,
+  // but clears the instant the player starts interacting so it's never in the
+  // way. First pointer/key input dismisses it; press ? for the full keymap.
+  const controlsHint = document.getElementById('controls');
+  if (controlsHint) {
+    const dismissHint = (): void => {
+      controlsHint.classList.add('dismissed');
+      window.removeEventListener('pointerdown', dismissHint);
+      window.removeEventListener('keydown', dismissHint);
+    };
+    window.addEventListener('pointerdown', dismissHint);
+    window.addEventListener('keydown', dismissHint);
+  }
+
   scene = new THREE.Scene();
   scene.background = new THREE.Color(0x050510);
   scene.fog = new THREE.FogExp2(0x0a0020, 0.015);

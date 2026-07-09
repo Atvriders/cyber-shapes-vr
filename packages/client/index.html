@@ -75,18 +75,28 @@
         margin-top: 20px;
         font-size: 0.75rem;
         color: #0ff;
-        opacity: 0.6;
+        opacity: 0.9;
         text-align: center;
         line-height: 1.8;
-        animation: fadeControls 6s forwards;
+        /* Hold fully readable for ~20s, then fade gently — long enough to read
+           all three lines. Press ? anytime for the full keymap overlay. */
+        animation: fadeControls 24s forwards;
+        transition: opacity 0.4s ease;
+      }
+
+      /* Cleared on first interaction (see main.ts): once you start playing the
+         hint fades immediately; otherwise it lingers ~20s so it can be read. */
+      #controls.dismissed {
+        opacity: 0;
+        pointer-events: none;
       }
 
       @keyframes fadeControls {
         0% {
-          opacity: 0.6;
+          opacity: 0.9;
         }
-        70% {
-          opacity: 0.6;
+        83% {
+          opacity: 0.9;
         }
         100% {
           opacity: 0;
