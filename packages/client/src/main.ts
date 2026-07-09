@@ -212,6 +212,27 @@ function parseVoiceSenderId(playerId: string): number | null {
   return m ? Number(m[1]) : null;
 }
 
+// ---------------------------------------------------------------------------
+// Loading gate — hold the loading screen up until the world is actually ready
+// (offline seed done, or the server welcome snapshot applied) AND a few frames
+// have rendered, so nobody interacts with a half-initialised scene (the cause
+// of the "shapes on top of me / uniform colour / grip won't hold" first-load
+// jank on a laggy headset). A safety timeout reveals the scene anyway if the
+// connection stalls — never hang forever on "loading".
+// ---------------------------------------------------------------------------
+let worldReady = false;
+let loaderReadyFrames = 0;
+let loaderDone = false;
+
+function hideLoader(): void {
+  if (loaderDone) return;
+  loaderDone = true;
+  const el = document.getElementById('loading');
+  if (!el) return;
+  el.classList.add('done');
+  el.addEventListener('transitionend', () => (el.style.display = 'none'), { once: true });
+}
+
 function init(): void {
   renderer = new THREE.WebGLRenderer({ antialias: true });
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -328,12 +349,17 @@ function init(): void {
     connectToRoom(room, joinSecret);
   } else {
     seedOfflineShapes();
+    worldReady = true; // offline: local shapes exist immediately, nothing to await
   }
 
   wireShareButton();
 
   renderer.setAnimationLoop(gameLoop);
   window.addEventListener('resize', onResize);
+
+  // Safety net: never hang on the loading screen if the connection stalls —
+  // reveal the scene after 12 s regardless of whether the welcome arrived.
+  window.setTimeout(hideLoader, 12000);
 
   // Overlay toggling on XR session boundaries.
   renderer.xr.addEventListener('sessionstart', () => {
@@ -679,6 +705,7 @@ function connectToRoom(room: string, joinSecret?: string): void {
     onWelcome: (baseParams) => {
       clockSyncer?.start();
       desktopHud?.setBaseParams(baseParams ?? null);
+      worldReady = true; // server snapshot applied — the world is populated
     },
     // B8: real avatar hooks — remote players get a neon head + 2 hands + nameplate.
     onPose: (id, pose) => {
@@ -1078,6 +1105,12 @@ function gameLoop(timestamp: number, frame: XRFrame | null): void {
   } else {
     controls.update();
     effects.renderFrame(); // bloom composer (non-VR)
+  }
+
+  // 6) Loading gate: once the world is ready, let a few frames render (so the
+  //    shapes are actually drawn) before fading the loading screen out.
+  if (worldReady && !loaderDone && ++loaderReadyFrames >= 3) {
+    hideLoader();
   }
 }
 
