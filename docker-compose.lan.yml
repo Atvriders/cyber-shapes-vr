@@ -45,9 +45,11 @@
 #        style push (MDM profile, or a router-level static-lease + a *.local
 #        mDNS name) — document whichever the venue's hardware actually supports.
 #
-# Usage:
+# Usage (pulls the prebuilt GHCR images by default — the SAME images as the
+#         cloud deploy; only the mounted nginx-lan.conf + certs differ):
 #   cp .env.lan.example .env.lan   # LAN_URL / TUNNEL_URL / STAFF_KEY / etc.
-#   docker compose -f docker-compose.lan.yml --env-file .env.lan up --build
+#   docker compose -f docker-compose.lan.yml --env-file .env.lan up -d
+#   # to build from source instead, uncomment the `build:` blocks and add --build
 #
 # The preflight tool DETECTS LAN mode automatically (packages/server/src/preflight.ts
 # `connectivityMode`): with no reachable TUNNEL_URL and a reachable LAN_URL,
@@ -59,9 +61,12 @@
 services:
   # ── WebSocket + HTTP server (identical image to the cloud deploy) ─────────
   server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
+    # Prebuilt GHCR image (default; identical to the cloud deploy). Override
+    # IMAGE_SERVER for a rollback pin; uncomment `build:` to build from source.
+    image: ${IMAGE_SERVER:-ghcr.io/atvriders/cyber-shapes-vr-server:latest}
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile.server
     environment:
       PORT: '3030'
       DATA_DIR: /data
@@ -92,11 +97,12 @@ services:
 
   # ── nginx (static client + WS reverse-proxy + REAL TLS termination) ───────
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # Same built image as the cloud deploy — only the nginx CONFIG differs
+    # Same GHCR image as the cloud deploy — only the nginx CONFIG differs
     # (this file mounts nginx-lan.conf over the image's baked-in nginx.conf).
+    image: ${IMAGE_WEB:-ghcr.io/atvriders/cyber-shapes-vr:latest}
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     volumes:
       - ./nginx-lan.conf:/etc/nginx/nginx.conf:ro
       - ./nginx-security-headers.conf:/etc/nginx/security-headers.conf:ro

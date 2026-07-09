@@ -5,24 +5,26 @@
 #   server  — Node WS + HTTP server (port 3030, internal only)
 #   web     — nginx serving the static client + WS reverse-proxy (port 3020)
 #
-# Usage (build from source):
-#   docker compose up --build
+# Usage (pull prebuilt GHCR images — the DEFAULT; images published by
+#         .github/workflows/docker-publish.yml on every push to master):
+#   docker compose up -d
+#   # optionally pin a specific build for rollback:
+#   IMAGE_WEB=ghcr.io/atvriders/cyber-shapes-vr:sha-<short> \
+#   IMAGE_SERVER=ghcr.io/atvriders/cyber-shapes-vr-server:sha-<short> docker compose up -d
 #
-# Usage (pull prebuilt GHCR images — replace <sha> with a real image tag):
-#   IMAGE_WEB=ghcr.io/atvriders/cyber-shapes-vr:<sha>
-#   IMAGE_SERVER=ghcr.io/atvriders/cyber-shapes-vr-server:<sha>
-#   docker compose -f docker-compose.yml up
-#   (override image: lines below or set via env vars)
+# Usage (build from source instead): uncomment the `build:` blocks below, then
+#   docker compose up -d --build
 ##############################################################################
 
 services:
   # ── WebSocket + HTTP server ───────────────────────────────────────────────
   server:
-    build:
-      context: .
-      dockerfile: Dockerfile.server
-    # To pull a prebuilt image instead, comment out `build` above and set:
-    # image: ghcr.io/atvriders/cyber-shapes-vr-server:latest
+    # Prebuilt GHCR image (default). Override IMAGE_SERVER with a sha-pinned tag
+    # for rollback. To build from source, uncomment `build:` and pass --build.
+    image: ${IMAGE_SERVER:-ghcr.io/atvriders/cyber-shapes-vr-server:latest}
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile.server
     environment:
       PORT: '3030'
       DATA_DIR: /data
@@ -55,11 +57,12 @@ services:
 
   # ── nginx (static client + WS reverse-proxy) ─────────────────────────────
   web:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    # To pull a prebuilt image instead, comment out `build` above and set:
-    # image: ghcr.io/atvriders/cyber-shapes-vr:latest
+    # Prebuilt GHCR image (default). Override IMAGE_WEB with a sha-pinned tag
+    # for rollback. To build from source, uncomment `build:` and pass --build.
+    image: ${IMAGE_WEB:-ghcr.io/atvriders/cyber-shapes-vr:latest}
+    # build:
+    #   context: .
+    #   dockerfile: Dockerfile
     ports:
       # Cloudflare Tunnel forwards to this port. C24 audit (MF2): it is reachable
       # ORIGIN-DIRECT (bypassing Cloudflare) — restrict it to Cloudflare IP ranges
